@@ -2,7 +2,7 @@
 
 Jogo de damas em 3D, feito para rodar no navegador do celular (Android e iPhone). As peças são pneus em pé que rodam ao andar, e o tabuleiro fica no centro de um autódromo oval no estilo NASCAR, com arquibancada lotada de pneus torcedores e carros dando voltas na pista.
 
-**Jogar agora:** https://victorfrossard.github.io/vincol-damas-3d/ <!-- ajuste se o usuário/repositório for outro -->
+**Jogar agora:** https://frossard33.github.io/vincol-damas-3d/
 
 ## Como jogar
 
