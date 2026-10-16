@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="theme-color" content="#111114" />
+  <link rel="icon" type="image/jpeg" href="logos.jpg.jpeg" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="description" content="Jogo de damas 3D da Vincol Pneus, Volta Redonda RJ. Jogue contra a IA e entre no ranking!" />
+  <title>Vincol Pneus — Damas | Volta Redonda RJ</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
+
+  <link rel="stylesheet" href="style.css" />
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+  <!-- Tabuleiro 3D -->
+  <main id="canvas-container" aria-label="Tabuleiro"></main>
+
+  <!-- Placar superior -->
+  <header class="hud" aria-label="Placar">
+    <div class="hud-side" id="hud-white">
+      <span class="hud-dot silver"></span>
+      <span class="hud-name" id="name-white">Prata</span>
+      <span class="hud-count" id="count-white">12</span>
+    </div>
+    <div class="hud-center">
+      <span class="hud-timer" id="hud-timer">00:00</span>
+      <span class="hud-level" id="hud-level">Médio</span>
+    </div>
+    <div class="hud-side right" id="hud-black">
+      <span class="hud-count" id="count-black">12</span>
+      <span class="hud-name" id="name-black">Vermelho</span>
+      <span class="hud-dot red"></span>
+    </div>
+  </header>
+
+  <!-- Mensagens do jogo -->
+  <div class="toast" id="toast" role="status" aria-live="polite">
+    <span id="toast-text">Bem-vindo à Vincol Pneus!</span>
+  </div>
+
+  <!-- Barra de ações -->
+  <nav class="dock" aria-label="Ações do jogo">
+    <button class="dock-btn" id="btn-menu" type="button">
+      <span class="material-icons-round">home</span>
+      <span>Início</span>
+    </button>
+    <button class="dock-btn" id="btn-undo" type="button">
+      <span class="material-icons-round">undo</span>
+      <span>Desfazer</span>
+    </button>
+    <button class="dock-btn" id="btn-camera" type="button">
+      <span class="material-icons-round">videocam</span>
+      <span id="camera-label">Câmera</span>
+    </button>
+    <button class="dock-btn" id="btn-ranking" type="button">
+      <span class="material-icons-round">leaderboard</span>
+      <span>Ranking</span>
+    </button>
+  </nav>
+
+  <!-- Tela inicial -->
+  <section class="overlay" id="start-screen" aria-labelledby="start-title">
+    <form class="card start-card" id="start-form" novalidate>
+      <div class="brand">
+        <div class="brand-logo">
+          <img src="logo-vincol.png" alt="Vincol desde 1979" width="294" height="126" />
+        </div>
+        <h1 id="start-title">Damas 3D</h1>
+        <p>Vincol Pneus • Volta Redonda RJ</p>
+      </div>
+
+      <label class="field">
+        <span class="field-label">Nome e sobrenome</span>
+        <input id="player-name" type="text" autocomplete="name" maxlength="40" placeholder="Ex.: Maria Souza" enterkeyhint="go" />
+        <span class="field-error" id="name-error"></span>
+      </label>
+
+      <div class="field">
+        <span class="field-label">Modo de jogo</span>
+        <div class="segmented" role="radiogroup" id="mode-group">
+          <button type="button" role="radio" data-mode="ai" class="seg active" aria-checked="true">Contra a IA</button>
+          <button type="button" role="radio" data-mode="pvp" class="seg" aria-checked="false">2 jogadores</button>
+        </div>
+      </div>
+
+      <div class="field" id="level-field">
+        <span class="field-label">Dificuldade</span>
+        <div class="segmented four" role="radiogroup" id="level-group">
+          <button type="button" role="radio" data-level="facil" class="seg">Fácil</button>
+          <button type="button" role="radio" data-level="medio" class="seg">Médio</button>
+          <button type="button" role="radio" data-level="dificil" class="seg">Difícil</button>
+          <button type="button" role="radio" data-level="mestre" class="seg">Mestre</button>
+        </div>
+      </div>
+
+      <button class="btn primary big" type="submit">
+        <span class="material-icons-round">play_arrow</span>
+        Jogar
+      </button>
+      <button class="btn ghost hidden" type="button" id="btn-continue">
+        <span class="material-icons-round">play_circle</span>
+        Continuar partida
+      </button>
+      <button class="btn ghost" type="button" id="btn-start-ranking">
+        <span class="material-icons-round">leaderboard</span>
+        Ver ranking
+      </button>
+      <p class="hint">Vença a IA para entrar no ranking. Quanto mais difícil o nível e menor o tempo, melhor a posição.</p>
+    </form>
+  </section>
+
+  <!-- Ranking -->
+  <section class="overlay hidden" id="ranking-screen" aria-labelledby="ranking-title">
+    <div class="card ranking-card">
+      <div class="card-head">
+        <h2 id="ranking-title">Ranking</h2>
+        <button class="icon-btn" type="button" id="btn-close-ranking" aria-label="Fechar ranking">
+          <span class="material-icons-round">close</span>
+        </button>
+      </div>
+      <div class="tabs" role="tablist" id="ranking-tabs">
+        <button type="button" role="tab" class="tab active" data-filter="todos">Todos</button>
+        <button type="button" role="tab" class="tab" data-filter="mestre">Mestre</button>
+        <button type="button" role="tab" class="tab" data-filter="dificil">Difícil</button>
+        <button type="button" role="tab" class="tab" data-filter="medio">Médio</button>
+        <button type="button" role="tab" class="tab" data-filter="facil">Fácil</button>
+      </div>
+      <ol class="ranking-list" id="ranking-list"></ol>
+    </div>
+  </section>
+
+  <!-- Fim de partida -->
+  <section class="overlay hidden" id="gameover" aria-live="polite" aria-labelledby="gameover-title">
+    <div class="card gameover-card">
+      <span class="material-icons-round gameover-icon" id="gameover-icon">emoji_events</span>
+      <h2 id="gameover-title">Você venceu!</h2>
+      <p class="gameover-detail" id="gameover-detail"></p>
+      <p class="gameover-count">Nova partida em <b id="gameover-count">6</b>s</p>
+      <div class="row">
+        <button class="btn ghost" type="button" id="btn-gameover-menu">Início</button>
+        <button class="btn primary" type="button" id="btn-play-again">Jogar de novo</button>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site-footer">
+    Desenvolvido por <strong>Victor Frossard</strong> • Engenheiro de Software
+  </footer>
+
+  <script src="logo-data.js"></script>
+  <script src="script.js"></script>
+</body>
+</html>
