@@ -858,7 +858,9 @@ function animateMove(pieceMesh, targetR, targetC, onComplete) {
   pieceMesh.userData.isAnimating = true;
   const startPos = pieceMesh.position.clone();
   const endPos = boardToWorld(targetR, targetC);
-  const duration = 520;
+  // Dama andando longe leva um pouco mais de tempo, sem ficar arrastada
+  const span = Math.max(Math.abs(targetR - pieceMesh.userData.r), Math.abs(targetC - pieceMesh.userData.c));
+  const duration = 520 + Math.max(0, span - 1) * 90;
   const startTime = performance.now();
   const roll = makeRoller(pieceMesh, startPos, endPos);
 
@@ -892,7 +894,11 @@ function animateAttack(attackerMesh, capturedMesh, targetR, targetC, onComplete)
   const startPos = attackerMesh.position.clone();
   const victimPos = capturedMesh.position.clone();
   const endPos = boardToWorld(targetR, targetC);
-  const duration = 720;
+  const span = Math.max(Math.abs(targetR - attackerMesh.userData.r), Math.abs(targetC - attackerMesh.userData.c));
+  const duration = 720 + Math.max(0, span - 2) * 90;
+  // Na captura à distância a peça adversária quebra quando a dama passa por cima dela
+  const total = Math.hypot(endPos.x - startPos.x, endPos.z - startPos.z) || 1;
+  const hitAt = Math.min(0.9, Math.hypot(victimPos.x - startPos.x, victimPos.z - startPos.z) / total);
   const startTime = performance.now();
   let shattered = false;
   const beamColor = attackerMesh.userData.color === 'white' ? 0xeceff1 : 0xff5252;
@@ -906,7 +912,7 @@ function animateAttack(attackerMesh, capturedMesh, targetR, targetC, onComplete)
     attackerMesh.position.y = endPos.y + Math.sin(ease * Math.PI) * 1.2;
     roll(ease * 1.6, t); // gira mais rápido no salto
 
-    if (t >= 0.48 && !shattered) {
+    if (ease >= hitAt && !shattered) {
       shattered = true;
       spawnStrikeBeam(attackerMesh.position.clone(), victimPos.clone().setY(0.4), beamColor);
       animateDestruction(capturedMesh);
@@ -1088,6 +1094,44 @@ function createEngine() {
     const r = i >> 3;
     const c = i & 7;
     const dirs = dirsFor(p);
+    if (p === 2 || p === -2) {
+      // Dama de longo alcance: corre pela diagonal, salta uma peça adversária
+      // e pode parar em qualquer casa livre depois dela
+      for (let k = 0; k < 4; k++) {
+        const dr = dirs[k][0];
+        const dc = dirs[k][1];
+        let mr = r + dr;
+        let mc = c + dc;
+        while (mr >= 0 && mr <= 7 && mc >= 0 && mc <= 7 && b[mr * 8 + mc] === 0) {
+          mr += dr;
+          mc += dc;
+        }
+        if (mr < 0 || mr > 7 || mc < 0 || mc > 7) continue;
+        const m = mr * 8 + mc;
+        if (b[m] * p >= 0) continue;
+        const victim = b[m];
+        let jr = mr + dr;
+        let jc = mc + dc;
+        while (jr >= 0 && jr <= 7 && jc >= 0 && jc <= 7 && b[jr * 8 + jc] === 0) {
+          const j = jr * 8 + jc;
+          b[m] = 0;
+          b[i] = 0;
+          b[j] = p;
+          path.push(j);
+          capt.push(m);
+          out.push({ path: path.slice(), caps: capt.slice() });
+          genJumps(b, j, p, path, capt, out);
+          path.pop();
+          capt.pop();
+          b[j] = 0;
+          b[i] = p;
+          b[m] = victim;
+          jr += dr;
+          jc += dc;
+        }
+      }
+      return;
+    }
     for (let k = 0; k < dirs.length; k++) {
       const dr = dirs[k][0];
       const dc = dirs[k][1];
@@ -1125,12 +1169,17 @@ function createEngine() {
       const r = i >> 3;
       const c = i & 7;
       const dirs = dirsFor(p);
+      const king = p === 2 || p === -2;
       for (let k = 0; k < dirs.length; k++) {
-        const nr = r + dirs[k][0];
-        const nc = c + dirs[k][1];
-        if (nr < 0 || nr > 7 || nc < 0 || nc > 7) continue;
-        const j = nr * 8 + nc;
-        if (b[j] === 0) quiet.push({ path: [i, j], caps: [] });
+        let nr = r + dirs[k][0];
+        let nc = c + dirs[k][1];
+        // A dama anda quantas casas livres quiser na diagonal
+        while (nr >= 0 && nr <= 7 && nc >= 0 && nc <= 7 && b[nr * 8 + nc] === 0) {
+          quiet.push({ path: [i, nr * 8 + nc], caps: [] });
+          if (!king) break;
+          nr += dirs[k][0];
+          nc += dirs[k][1];
+        }
       }
     }
     return caps.concat(quiet); // captura é opcional; capturas vêm primeiro
@@ -1192,13 +1241,13 @@ function createEngine() {
         }
         bAll.push(i);
       } else if (p === 2) {
-        wMat += 165;
+        wMat += 250;
         if (central) score += 10;
         if (edge) score -= 8;              // dama na borda/canto fica passiva
         wKings.push(i);
         wAll.push(i);
       } else {
-        bMat += 165;
+        bMat += 250;
         if (central) score -= 10;
         if (edge) score += 8;
         bKings.push(i);
@@ -1712,6 +1761,33 @@ function getMovesForPiece(piece) {
 
   const normalMoves = [];
   const captureMoves = [];
+
+  const inside = (y, x) => y >= 0 && y < 8 && x >= 0 && x < 8;
+  if (isKing) {
+    // Dama de longo alcance: anda quantas casas quiser na diagonal e captura à distância,
+    // podendo parar em qualquer casa livre depois da peça capturada
+    [-1, 1].forEach((dr) => {
+      [-1, 1].forEach((dc) => {
+        let nr = r + dr;
+        let nc = c + dc;
+        while (inside(nr, nc) && !boardState[nr][nc]) {
+          normalMoves.push({ toR: nr, toC: nc, captured: null });
+          nr += dr;
+          nc += dc;
+        }
+        if (!inside(nr, nc) || boardState[nr][nc].userData.color === color) return;
+        const victim = boardState[nr][nc];
+        let jr = nr + dr;
+        let jc = nc + dc;
+        while (inside(jr, jc) && !boardState[jr][jc]) {
+          captureMoves.push({ toR: jr, toC: jc, captured: victim });
+          jr += dr;
+          jc += dc;
+        }
+      });
+    });
+    return [...captureMoves, ...normalMoves];
+  }
 
   dirs.forEach((dr) => {
     [-1, 1].forEach((dc) => {
