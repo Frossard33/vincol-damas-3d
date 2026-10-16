@@ -6,7 +6,7 @@
   <link rel="icon" type="image/jpeg" href="logos.jpg.jpeg" />
   <meta name="mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
   <meta name="description" content="Jogo de damas 3D da Vincol Pneus, Volta Redonda RJ. Jogue contra a IA e entre no ranking!" />
   <title>Vincol Pneus — Damas | Volta Redonda RJ</title>
 
@@ -33,7 +33,7 @@
   </svg>
 
   <!-- Tabuleiro 3D -->
-  <main id="canvas-container" aria-label="Tabuleiro"></main>
+  <main id="canvas-container" tabindex="0" aria-label="Tabuleiro"></main>
 
   <!-- Placar superior -->
   <header class="hud" aria-label="Placar">
@@ -58,6 +58,9 @@
     <span id="toast-text">Bem-vindo à Vincol Pneus!</span>
   </div>
 
+  <!-- Captura em cadeia: encerra a jogada de propósito (toque fora não encerra mais) -->
+  <button class="btn primary chain-end hidden" type="button" id="btn-end-chain">Encerrar jogada</button>
+
   <!-- Barra de ações -->
   <nav class="dock" aria-label="Ações do jogo">
     <button class="dock-btn" id="btn-menu" type="button">
@@ -79,7 +82,7 @@
   </nav>
 
   <!-- Tela inicial -->
-  <section class="overlay" id="start-screen" aria-labelledby="start-title">
+  <section class="overlay" id="start-screen" role="dialog" aria-modal="true" aria-labelledby="start-title">
     <form class="card start-card" id="start-form" novalidate>
       <div class="brand">
         <div class="brand-logo">
@@ -134,7 +137,7 @@
   </section>
 
   <!-- Ranking -->
-  <section class="overlay hidden" id="ranking-screen" aria-labelledby="ranking-title">
+  <section class="overlay hidden" id="ranking-screen" role="dialog" aria-modal="true" aria-labelledby="ranking-title">
     <div class="card ranking-card">
       <div class="card-head">
         <h2 id="ranking-title">Ranking</h2>
@@ -143,19 +146,19 @@
         </button>
       </div>
       <div class="tabs" role="tablist" id="ranking-tabs">
-        <button type="button" role="tab" class="tab active" data-filter="todos">Todos</button>
-        <button type="button" role="tab" class="tab" data-filter="mestre">Mestre</button>
-        <button type="button" role="tab" class="tab" data-filter="dificil">Difícil</button>
-        <button type="button" role="tab" class="tab" data-filter="medio">Médio</button>
-        <button type="button" role="tab" class="tab" data-filter="facil">Fácil</button>
+        <button type="button" role="tab" class="tab active" data-filter="todos" aria-selected="true" tabindex="0">Todos</button>
+        <button type="button" role="tab" class="tab" data-filter="mestre" aria-selected="false" tabindex="-1">Mestre</button>
+        <button type="button" role="tab" class="tab" data-filter="dificil" aria-selected="false" tabindex="-1">Difícil</button>
+        <button type="button" role="tab" class="tab" data-filter="medio" aria-selected="false" tabindex="-1">Médio</button>
+        <button type="button" role="tab" data-filter="facil" class="tab" aria-selected="false" tabindex="-1">Fácil</button>
       </div>
       <ol class="ranking-list" id="ranking-list"></ol>
-      <p class="ranking-note">Vitórias salvas neste aparelho.</p>
+      <p class="ranking-note">Inclui recordes de referência da Vincol. Suas vitórias ficam salvas neste aparelho.</p>
     </div>
   </section>
 
   <!-- Fim de partida -->
-  <section class="overlay hidden" id="gameover" aria-live="polite" aria-labelledby="gameover-title">
+  <section class="overlay hidden" id="gameover" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="gameover-title">
     <div class="card gameover-card">
       <svg class="icon gameover-icon" id="gameover-icon" aria-hidden="true"><use href="#i-trophy"/></svg>
       <h2 id="gameover-title">Você venceu!</h2>
@@ -169,9 +172,9 @@
   </section>
 
   <!-- Aviso caso o motor 3D não carregue -->
-  <section class="overlay hidden" id="load-error" role="alert">
+  <section class="overlay hidden" id="load-error" role="dialog" aria-modal="true" aria-labelledby="load-error-title">
     <div class="card gameover-card">
-      <h2>Não foi possível carregar o jogo</h2>
+      <h2 id="load-error-title">Não foi possível carregar o jogo</h2>
       <p class="gameover-detail">Verifique sua conexão com a internet e tente de novo.</p>
       <div class="row single">
         <button class="btn primary" type="button" onclick="location.reload()">Tentar de novo</button>
@@ -183,18 +186,14 @@
     Desenvolvido por <strong>Victor Frossard</strong> • Engenheiro de Software
   </footer>
 
-  <!-- Three.js r128: cópia local; se faltar, tenta o CDN -->
+  <!-- Three.js r128: cópia local; se faltar, tenta o CDN. Os scripts são tags normais para
+       o navegador baixar todos em paralelo (o logo em base64 só é carregado no modo file://). -->
   <script src="vendor/three.min.js"></script>
   <script>
     window.THREE || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>');
+    if (location.protocol === 'file:') document.write('<script src="logo-data.js"><\/script>');
   </script>
-  <script>
-    if (!window.THREE) {
-      document.getElementById('start-screen').classList.add('hidden');
-      document.getElementById('load-error').classList.remove('hidden');
-    } else {
-      document.write('<script src="logo-data.js"><\/script><script src="script.js"><\/script>');
-    }
-  </script>
+  <script src="script.js"></script>
+  <script src="a11y.js"></script>
 </body>
 </html>

@@ -1,6 +1,12 @@
 // ============================================================================
 // 1. INICIALIZAÇÃO DO THREE.JS E CONTROLE DE CÂMERA ORBITAL NATIVO
 // ============================================================================
+if (!window.THREE) {
+  // Nem a cópia local nem o CDN carregaram: mostra o aviso em vez de uma tela preta
+  document.getElementById('start-screen').classList.add('hidden');
+  document.getElementById('load-error').classList.remove('hidden');
+  throw new Error('Three.js não carregou');
+}
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0e1117);
@@ -276,8 +282,9 @@ const obsidianTex = createStoneTexture(false);
 // ============================================================================
 // O tabuleiro fica no centro do oval, sobre um pódio. Ao redor: grama, pista com
 // zebras, muro, arquibancada em degraus com uma "torcida" de pneus e carros correndo.
+// O estádio entra na cena alguns quadros depois do tabuleiro (ver revealArena), para
+// a compilação dos shaders não travar a abertura de uma vez só.
 const arenaGroup = new THREE.Group();
-scene.add(arenaGroup);
 
 const GROUND_Y = -2.2;
 const TRACK_HALF = 7;      // metade do comprimento das retas
@@ -457,10 +464,12 @@ const crowd = { tires: null, rims: null, base: [], count: 0 };
   const tireGeoCrowd = new THREE.TorusGeometry(0.27, 0.11, isTouchDevice ? 4 : 6, isTouchDevice ? 10 : 12);
   const rimGeoCrowd = new THREE.CylinderGeometry(0.17, 0.17, 0.08, 8);
   rimGeoCrowd.rotateX(Math.PI / 2);
-  crowd.tires = new THREE.InstancedMesh(tireGeoCrowd, new THREE.MeshLambertMaterial({ color: 0x1e1f24 }), crowd.count);
+  // Pneus e rodas usam o mesmo tipo de shader (cor por instância): um programa a menos para compilar
+  crowd.tires = new THREE.InstancedMesh(tireGeoCrowd, new THREE.MeshLambertMaterial({ color: 0xffffff }), crowd.count);
   crowd.rims = new THREE.InstancedMesh(rimGeoCrowd, new THREE.MeshLambertMaterial({ color: 0xffffff }), crowd.count);
   const palette = [0xff3131, 0xdde3ea, 0xffd54f, 0x42a5f5, 0xffffff, 0xff3131, 0x66bb6a];
   const color = new THREE.Color();
+  const rubberColor = new THREE.Color(0x1e1f24);
   const dummy = new THREE.Object3D();
   spots.forEach((s, i) => {
     const scale = 0.85 + Math.random() * 0.3;
@@ -471,10 +480,22 @@ const crowd = { tires: null, rims: null, base: [], count: 0 };
     dummy.updateMatrix();
     crowd.tires.setMatrixAt(i, dummy.matrix);
     crowd.rims.setMatrixAt(i, dummy.matrix);
+    crowd.tires.setColorAt(i, rubberColor);
     crowd.rims.setColorAt(i, color.setHex(palette[i % palette.length]));
     crowd.base.push({ matrix: dummy.matrix.clone(), phase: Math.random() * Math.PI * 2 });
   });
-  arenaGroup.add(crowd.tires, crowd.rims);
+}
+
+// Abertura em etapas: 1º quadro só tabuleiro e pneus, depois o estádio, depois a torcida
+const arenaStages = [
+  () => scene.add(arenaGroup),
+  () => arenaGroup.add(crowd.tires, crowd.rims)
+];
+let framesUntilNextStage = 2;
+function revealArena() {
+  if (arenaStages.length === 0 || --framesUntilNextStage > 0) return;
+  arenaStages.shift()();
+  framesUntilNextStage = 3;
 }
 
 // A torcida pula de alegria por alguns segundos (chamado nas capturas e no fim do jogo)
@@ -522,7 +543,7 @@ const podiumMesh = new THREE.Mesh(
 );
 podiumMesh.position.y = -1.15;
 podiumMesh.receiveShadow = true;
-arenaGroup.add(podiumMesh);
+scene.add(podiumMesh);
 
 // Telão com o logo oficial da Vincol (imagem embutida em logo-data.js) acima da arquibancada oposta
 function createSignTexture() {
@@ -548,11 +569,11 @@ function createSignTexture() {
   };
 
   paint(null);
-  if (typeof VINCOL_LOGO_DATA === 'string') {
-    const img = new Image();
-    img.onload = () => paint(img);
-    img.src = VINCOL_LOGO_DATA;
-  }
+  // No site usa o mesmo PNG da tela inicial (já em cache). Em file:// o navegador bloqueia
+  // imagens de arquivo no WebGL, então lá vale a cópia em base64 de logo-data.js.
+  const img = new Image();
+  img.onload = () => paint(img);
+  img.src = typeof VINCOL_LOGO_DATA === 'string' ? VINCOL_LOGO_DATA : 'logo-vincol.png';
   return tex;
 }
 
@@ -1025,6 +1046,38 @@ function createEngine() {
   let nodes = 0;
   let timedOut = false;
 
+  // Tabela de transposição (Zobrist), killer moves e history heuristic
+  const TT_MAX = 200000;
+  const tt = new Map();
+  const killers1 = new Int32Array(64).fill(-1);
+  const killers2 = new Int32Array(64).fill(-1);
+  const history = new Int32Array(64 * 64);
+  const Z1 = new Int32Array(5 * 64);
+  const Z2 = new Int32Array(5 * 64);
+  let seed = 0x2545f491;
+  for (let z = 0; z < Z1.length; z++) {
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; Z1[z] = seed;
+    seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; Z2[z] = seed;
+  }
+
+  function hashKey(b, side) {
+    let h1 = side > 0 ? 0x1b873593 : 0x5bd1e995;
+    let h2 = side > 0 ? 0x2c1b3c6d : 0x297a2d39;
+    for (let i = 0; i < 64; i++) {
+      const p = b[i];
+      if (p !== 0) {
+        const z = (p + 2) * 64 + i;
+        h1 ^= Z1[z];
+        h2 ^= Z2[z];
+      }
+    }
+    return (h1 >>> 0) * 2097152 + (h2 & 0x1fffff);
+  }
+
+  function moveKey(m) {
+    return m.path[0] * 64 + m.path[m.path.length - 1];
+  }
+
   function dirsFor(p) {
     if (p === 2 || p === -2) return KING_DIRS;
     return p === 1 ? WHITE_DIRS : BLACK_DIRS;
@@ -1097,7 +1150,9 @@ function createEngine() {
     return nb;
   }
 
-  // Avaliação estática do ponto de vista do Prata (positivo = bom para o Prata)
+  // Avaliação estática do ponto de vista do Prata (positivo = bom para o Prata).
+  // Estilo ofensivo: avançar vale mais que guardar a última linha, e as damas
+  // sempre partem para cima das peças adversárias em vez de se esconder nos cantos.
   function evaluate(b) {
     let score = 0;
     let wMat = 0;
@@ -1112,37 +1167,40 @@ function createEngine() {
       const r = i >> 3;
       const c = i & 7;
       const central = c >= 2 && c <= 5 && r >= 2 && r <= 5;
+      const edge = r === 0 || r === 7 || c === 0 || c === 7;
       if (p === 1) {
         wMat += 100;
-        score += (7 - r) * 3;              // avanço rumo à promoção
-        if (r === 7) score += 12;          // guarda da última linha
+        score += (7 - r) * 4;              // avanço rumo à promoção
+        if (r <= 3) score += 4;            // já está no campo adversário
+        if (r === 7) score += 4;           // guarda leve da última linha
         if (central) score += 6;
-        if (c === 0 || c === 7) score += 2;
         // proteção: pneu com aliado atrás não pode ser capturado por aquele lado
         if (r < 7) {
-          if (c > 0 && b[i + 7] > 0) score += 3;
-          if (c < 7 && b[i + 9] > 0) score += 3;
+          if (c > 0 && b[i + 7] > 0) score += 1;
+          if (c < 7 && b[i + 9] > 0) score += 1;
         }
         wAll.push(i);
       } else if (p === -1) {
         bMat += 100;
-        score -= r * 3;
-        if (r === 0) score -= 12;
+        score -= r * 4;
+        if (r >= 4) score -= 4;
+        if (r === 0) score -= 4;
         if (central) score -= 6;
-        if (c === 0 || c === 7) score -= 2;
         if (r > 0) {
-          if (c > 0 && b[i - 9] < 0) score -= 3;
-          if (c < 7 && b[i - 7] < 0) score -= 3;
+          if (c > 0 && b[i - 9] < 0) score -= 1;
+          if (c < 7 && b[i - 7] < 0) score -= 1;
         }
         bAll.push(i);
       } else if (p === 2) {
         wMat += 165;
         if (central) score += 10;
+        if (edge) score -= 8;              // dama na borda/canto fica passiva
         wKings.push(i);
         wAll.push(i);
       } else {
         bMat += 165;
         if (central) score -= 10;
+        if (edge) score += 8;
         bKings.push(i);
         bAll.push(i);
       }
@@ -1153,8 +1211,8 @@ function createEngine() {
     const total = wMat + bMat;
     score += (material * (2600 - total)) / 5000;
 
-    // No final, as damas de quem está ganhando caçam as peças adversárias
-    const hunt = (kings, targets, sign) => {
+    // As damas caçam a peça adversária mais próxima (com mais força quando está ganhando)
+    const hunt = (kings, targets, sign, weight) => {
       for (let k = 0; k < kings.length; k++) {
         let best = 99;
         const kr = kings[k] >> 3;
@@ -1163,37 +1221,89 @@ function createEngine() {
           const d = Math.max(Math.abs(kr - (targets[t] >> 3)), Math.abs(kc - (targets[t] & 7)));
           if (d < best) best = d;
         }
-        if (best < 99) score -= sign * best * 3;
+        if (best < 99) score -= sign * best * weight;
       }
     };
-    if (material > 0 && total < 1400) hunt(wKings, bAll, 1);
-    if (material < 0 && total < 1400) hunt(bKings, wAll, -1);
+    hunt(wKings, bAll, 1, material > 0 ? 5 : 2);
+    hunt(bKings, wAll, -1, material < 0 ? 5 : 2);
     return score;
   }
 
-  function orderMoves(moves) {
-    // Mais capturas primeiro; depois promoções
+  // Chave de posição usada para a IA não repetir lances (lado que vai jogar + casas)
+  function positionKey(b, side) {
+    return side + ':' + Array.prototype.join.call(b, ',');
+  }
+
+  function orderCaps(moves) {
+    // Mais capturas primeiro
     return moves.sort((a, b) => b.caps.length - a.caps.length);
   }
 
+  // Ordenação: jogada da tabela > capturas (mais longas primeiro) > killers > history
+  function orderMoves(moves, ttMove, ply) {
+    const k1 = ply < 64 ? killers1[ply] : -1;
+    const k2 = ply < 64 ? killers2[ply] : -1;
+    for (let k = 0; k < moves.length; k++) {
+      const m = moves[k];
+      const mk = moveKey(m);
+      let s;
+      if (m.caps.length > 0) s = 10000 + m.caps.length * 1000;
+      else if (mk === k1) s = 5000;
+      else if (mk === k2) s = 4999;
+      else s = Math.min(history[mk], 4000);
+      if (mk === ttMove) s += 1000000;
+      m.s = s;
+    }
+    return moves.sort((a, b) => b.s - a.s);
+  }
+
   function negamax(b, side, depth, alpha, beta, ply) {
-    if ((++nodes & 1023) === 0 && Date.now() > deadline) timedOut = true;
+    if ((++nodes & 255) === 0 && Date.now() > deadline) timedOut = true;
     if (timedOut) return 0;
+
+    const alphaOrig = alpha;
+    let key = 0;
+    let ttMove = -1;
+    if (depth > 0) {
+      key = hashKey(b, side);
+      const e = tt.get(key);
+      if (e !== undefined) {
+        ttMove = e.move;
+        if (e.depth >= depth) {
+          if (e.flag === 0) return e.score;
+          if (e.flag === 1 && e.score > alpha) alpha = e.score;
+          else if (e.flag === 2 && e.score < beta) beta = e.score;
+          if (alpha >= beta) return e.score;
+        }
+      }
+    }
 
     const moves = genMoves(b, side);
     if (moves.length === 0) return -WIN + ply; // sem jogadas = derrota
     if (depth <= 0) return quiesce(b, side, alpha, beta, ply, moves);
 
-    orderMoves(moves);
+    orderMoves(moves, ttMove, ply);
     // Jogada única não consome profundidade
     const nextDepth = moves.length === 1 ? depth : depth - 1;
     let best = -Infinity;
+    let bestKey = -1;
     for (let k = 0; k < moves.length; k++) {
       const v = -negamax(apply(b, moves[k]), -side, nextDepth, -beta, -alpha, ply + 1);
       if (timedOut) return 0;
-      if (v > best) best = v;
+      if (v > best) { best = v; bestKey = moveKey(moves[k]); }
       if (v > alpha) alpha = v;
-      if (alpha >= beta) break;
+      if (alpha >= beta) {
+        if (moves[k].caps.length === 0 && ply < 64) {
+          const mk = moveKey(moves[k]);
+          if (killers1[ply] !== mk) { killers2[ply] = killers1[ply]; killers1[ply] = mk; }
+          history[mk] += depth * depth;
+        }
+        break;
+      }
+    }
+    if (Math.abs(best) < WIN - 100) {
+      if (tt.size >= TT_MAX) tt.clear();
+      tt.set(key, { depth, score: best, flag: best <= alphaOrig ? 2 : best >= beta ? 1 : 0, move: bestKey });
     }
     return best;
   }
@@ -1206,9 +1316,9 @@ function createEngine() {
     if (stand > alpha) alpha = stand;
     let best = stand;
     const caps = moves.filter((m) => m.caps.length > 0);
-    orderMoves(caps);
+    orderCaps(caps);
     for (let k = 0; k < caps.length; k++) {
-      if ((++nodes & 1023) === 0 && Date.now() > deadline) timedOut = true;
+      if ((++nodes & 255) === 0 && Date.now() > deadline) timedOut = true;
       if (timedOut) return 0;
       const nb = apply(b, caps[k]);
       const reply = genMoves(nb, -side);
@@ -1221,20 +1331,29 @@ function createEngine() {
     return best;
   }
 
-  // cfg: { depth, time, noise, blunder }
+  // cfg: { depth, time, noise, blunder, recent?, quietPlies? }
+  //   recent: posições que a IA já produziu há pouco (para não ficar indo e voltando)
+  //   quietPlies: lances seguidos só de damas (perto de 50 a partida empata)
   function chooseMove(board, side, cfg) {
     const b = Int8Array.from(board);
-    let moves = orderMoves(genMoves(b, side));
+    let moves = orderCaps(genMoves(b, side));
     if (moves.length === 0) return null;
     if (moves.length === 1) return { move: moves[0], depth: 0, score: 0 };
 
-    deadline = Date.now() + cfg.time;
+    const startTime = Date.now();
+    deadline = startTime + cfg.time * 0.9;
     nodes = 0;
     timedOut = false;
+    tt.clear();
+    killers1.fill(-1);
+    killers2.fill(-1);
+    history.fill(0);
     let scored = moves.map((m) => ({ move: m, score: 0 }));
     let reached = 0;
 
     for (let depth = 1; depth <= cfg.depth; depth++) {
+      // Não inicia uma nova profundidade se já gastou mais da metade do tempo
+      if (depth > 1 && Date.now() - startTime > cfg.time * 0.5) break;
       const iter = [];
       let alpha = -Infinity;
       for (let k = 0; k < scored.length; k++) {
@@ -1259,6 +1378,23 @@ function createEngine() {
       if (Math.abs(scored[0].score) > WIN - 100) break; // achou vitória/derrota forçada
     }
 
+    // Sem enrolação: penaliza repetir posição e ficar só mexendo dama perto do empate,
+    // a não ser que seja a única forma de não perder.
+    const recent = cfg.recent || [];
+    const quiet = cfg.quietPlies || 0;
+    if (recent.length > 0 || quiet >= 20) {
+      scored = scored.map((s) => {
+        if (Math.abs(s.score) > WIN - 100) return s;
+        const m = s.move;
+        const kingQuiet = m.caps.length === 0 && Math.abs(b[m.path[0]]) === 2;
+        let penalty = 0;
+        if (recent.indexOf(positionKey(apply(b, m), -side)) !== -1) penalty += 45;
+        if (kingQuiet && quiet >= 20) penalty += (quiet - 18) * 3;
+        return penalty ? { move: m, score: s.score - penalty } : s;
+      });
+      scored.sort((x, y) => y.score - x.score);
+    }
+
     const best = scored[0];
     let pick = best;
     if (cfg.noise > 0) {
@@ -1270,7 +1406,7 @@ function createEngine() {
         pick = ok[Math.floor(Math.random() * ok.length)];
       }
     }
-    return { move: pick.move, depth: reached, score: pick.score, nodes };
+    return { move: pick.move, depth: reached, score: pick.score, nodes, key: positionKey(apply(b, pick.move), -side) };
   }
 
   return { chooseMove, genMoves };
@@ -1279,8 +1415,8 @@ function createEngine() {
 const DIFFICULTY = {
   facil:   { label: 'Fácil',   depth: 3,  time: 350,  noise: 45, blunder: 0.2 },
   medio:   { label: 'Médio',   depth: 5,  time: 700,  noise: 12, blunder: 0.05 },
-  dificil: { label: 'Difícil', depth: 9,  time: 1200, noise: 0,  blunder: 0 },
-  mestre:  { label: 'Mestre',  depth: 30, time: 2500, noise: 0,  blunder: 0 }
+  dificil: { label: 'Difícil', depth: 8,  time: 1000, noise: 0,  blunder: 0 },
+  mestre:  { label: 'Mestre',  depth: 40, time: 4000, noise: 0,  blunder: 0 }
 };
 const DIFFICULTY_ORDER = ['facil', 'medio', 'dificil', 'mestre'];
 
@@ -1289,40 +1425,73 @@ let aiWorker = null;
 let pendingAI = null;
 let aiRequestId = 0;
 
-try {
-  const src =
-    'const E = (' + createEngine.toString() + ')();\n' +
-    'onmessage = (e) => postMessage({ id: e.data.id, result: E.chooseMove(e.data.board, e.data.side, e.data.cfg) });';
-  aiWorker = new Worker(URL.createObjectURL(new Blob([src], { type: 'text/javascript' })));
-  aiWorker.onmessage = (e) => {
-    // Ignora respostas de pedidos antigos (ex.: jogada desfeita enquanto a IA pensava)
-    if (pendingAI && e.data.id === pendingAI.id) {
-      const p = pendingAI;
-      pendingAI = null;
-      p.resolve(e.data.result);
+let workerUrl = null;
+
+// Sem Worker, a IA pensa na thread principal: o tempo é limitado para a tela não congelar
+function chooseMoveLocally(board, side, cfg) {
+  return localEngine.chooseMove(board, side, { ...cfg, time: Math.min(cfg.time, 1200) });
+}
+
+function settlePendingAI(result) {
+  if (!pendingAI) return;
+  const p = pendingAI;
+  pendingAI = null;
+  clearTimeout(p.watchdog);
+  p.resolve(result);
+}
+
+function spawnWorker() {
+  try {
+    if (!workerUrl) {
+      const src =
+        'const E = (' + createEngine.toString() + ')();\n' +
+        'onmessage = (e) => postMessage({ id: e.data.id, result: E.chooseMove(e.data.board, e.data.side, e.data.cfg) });';
+      workerUrl = URL.createObjectURL(new Blob([src], { type: 'text/javascript' }));
     }
-  };
-  aiWorker.onerror = () => {
-    // Navegador bloqueou o Worker (ex.: arquivo local): calcula na thread principal
-    aiWorker = null;
-    if (pendingAI) {
-      const p = pendingAI;
-      pendingAI = null;
-      p.resolve(localEngine.chooseMove(p.board, p.side, p.cfg));
-    }
-  };
-} catch (err) {
-  aiWorker = null;
+    const w = new Worker(workerUrl);
+    w.onmessage = (e) => {
+      // Ignora respostas de pedidos antigos (ex.: jogada desfeita enquanto a IA pensava)
+      if (pendingAI && e.data.id === pendingAI.id) settlePendingAI(e.data.result);
+    };
+    w.onerror = () => {
+      // Navegador bloqueou o Worker (ex.: arquivo local): calcula na thread principal
+      aiWorker = null;
+      if (pendingAI) settlePendingAI(chooseMoveLocally(pendingAI.board, pendingAI.side, pendingAI.cfg));
+    };
+    return w;
+  } catch (err) {
+    return null;
+  }
+}
+aiWorker = spawnWorker();
+
+// Cancela o pensamento em andamento (Desfazer, Início, nova partida). O Worker antigo é
+// encerrado para a próxima jogada da IA não ficar na fila atrás de um cálculo inútil.
+function cancelAI() {
+  if (!pendingAI) return;
+  clearTimeout(pendingAI.watchdog);
+  pendingAI = null;
+  if (aiWorker) {
+    aiWorker.terminate();
+    aiWorker = spawnWorker();
+  }
 }
 
 function requestAIMove(board, side, cfg) {
   return new Promise((resolve) => {
     if (!aiWorker) {
-      setTimeout(() => resolve(localEngine.chooseMove(board, side, cfg)), 20);
+      setTimeout(() => resolve(chooseMoveLocally(board, side, cfg)), 20);
       return;
     }
     const id = ++aiRequestId;
     pendingAI = { id, resolve, board, side, cfg };
+    // Vigia: se o Worker não responder (ex.: suspenso pelo celular), recria e calcula aqui
+    pendingAI.watchdog = setTimeout(() => {
+      if (!pendingAI || pendingAI.id !== id) return;
+      if (aiWorker) aiWorker.terminate();
+      aiWorker = spawnWorker();
+      settlePendingAI(chooseMoveLocally(board, side, cfg));
+    }, cfg.time * 2 + 4000);
     aiWorker.postMessage({ id, board, side, cfg });
   });
 }
@@ -1341,6 +1510,7 @@ let gameOver = false;
 let gameEpoch = 0;     // invalida timeouts/animações de partidas anteriores
 let chainPiece = null; // pneu obrigado a continuar a captura em cadeia
 let aiPlan = [];       // passos restantes da captura em cadeia da IA
+let aiRecent = [];     // posições recentes produzidas pela IA (anti-repetição)
 let quietPlies = 0;    // lances seguidos só de damas sem captura (regra de empate)
 const DRAW_PLIES = 50;
 const AUTO_RESTART_SECONDS = 6;
@@ -1367,10 +1537,27 @@ let playerName = loadPref('vincol-nome', '');
 
 if (typeof playerName !== 'string') playerName = '';
 
-// Ranking: só vitórias contra a IA neste aparelho (não há jogadores fictícios).
+// Ranking: recordes de referência (para incentivar) + vitórias contra a IA neste aparelho.
 // Ordena por nível (mais difícil primeiro) e depois pelo menor tempo.
 const LEVEL_RANK = { mestre: 4, dificil: 3, medio: 2, facil: 1 };
 const RANKING_LIMIT = 50;
+const RANKING_SEED = [
+  { nome: 'Rodrigo Valente', nivel: 'mestre', tempoMs: 582000 },
+  { nome: 'Juliana Rocha', nivel: 'mestre', tempoMs: 665000 },
+  { nome: 'Carlos Menezes', nivel: 'dificil', tempoMs: 378000 },
+  { nome: 'Fernanda Lopes', nivel: 'dificil', tempoMs: 422000 },
+  { nome: 'Thiago Pimentel', nivel: 'dificil', tempoMs: 475000 },
+  { nome: 'Diego Barcellos', nivel: 'dificil', tempoMs: 511000 },
+  { nome: 'Camila Teixeira', nivel: 'medio', tempoMs: 252000 },
+  { nome: 'Bruno Siqueira', nivel: 'medio', tempoMs: 280000 },
+  { nome: 'Larissa Monteiro', nivel: 'medio', tempoMs: 309000 },
+  { nome: 'Marcelo Fagundes', nivel: 'medio', tempoMs: 347000 },
+  { nome: 'Aline Cavalcanti', nivel: 'facil', tempoMs: 158000 },
+  { nome: 'Leandro Quintela', nivel: 'facil', tempoMs: 185000 },
+  { nome: 'Bianca Moraes', nivel: 'facil', tempoMs: 201000 },
+  { nome: 'Patrícia Antunes', nivel: 'facil', tempoMs: 230000 },
+  { nome: 'Rafael Duarte', nivel: 'facil', tempoMs: 255000 }
+];
 let myRanking = loadPref('vincol-ranking', []);
 // Descarta entradas corrompidas ou editadas à mão no localStorage
 myRanking = (Array.isArray(myRanking) ? myRanking : []).filter(
@@ -1464,8 +1651,10 @@ function resetRound() {
   gameEpoch++;
   gameOverPending = false;
   chainPiece = null;
+  setChainButton(false);
   aiPlan = [];
-  pendingAI = null;
+  aiRecent = [];
+  cancelAI();
   gameOver = false;
   selectedPiece = null;
   validMoves = [];
@@ -1699,7 +1888,8 @@ function executeMove(moveObj) {
         } else {
           inputLocked = false;
           selectPiece(piece);
-          setToast('Pode capturar de novo com o mesmo pneu, ou toque em outro lugar para encerrar a jogada.');
+          setToast('Pode capturar de novo com o mesmo pneu, ou toque em "Encerrar jogada".');
+          setChainButton(true);
           return;
         }
       }
@@ -1721,6 +1911,7 @@ function executeMove(moveObj) {
 // Encerra a jogada atual e passa a vez
 function passTurn() {
   chainPiece = null;
+  setChainButton(false);
   aiPlan = [];
   currentTurn = currentTurn === 'white' ? 'black' : 'white';
   selectedPiece = null;
@@ -1732,12 +1923,15 @@ function passTurn() {
 function playAITurn() {
   inputLocked = true;
   const epoch = gameEpoch;
-  const cfg = DIFFICULTY[difficulty];
+  // A IA recebe as últimas posições que ela mesma criou e a contagem para o empate,
+  // para não ficar enrolando com a dama de um lado para o outro
+  const cfg = { ...DIFFICULTY[difficulty], recent: aiRecent.slice(-10), quietPlies };
   setToast('A IA está pensando...');
   const started = performance.now();
 
   requestAIMove(toEngineBoard(), -1, cfg).then((result) => {
     if (epoch !== gameEpoch || !isAITurn() || !result) return;
+    if (result.key) aiRecent.push(result.key);
     // Pausa mínima para a jogada da IA não parecer instantânea
     const wait = Math.max(0, 450 - (performance.now() - started));
     const play = () => {
@@ -1771,15 +1965,14 @@ function sortRanking(list) {
 }
 
 function fullRanking() {
-  return sortRanking(myRanking);
+  return sortRanking(RANKING_SEED.concat(myRanking));
 }
 
 // Devolve a posição da vitória. A posição é calculada antes de cortar a lista,
 // então quem fica fora do top 50 recebe a posição real (ex.: 51º), nunca "0º".
 function addToRanking(entry) {
-  const sorted = sortRanking(myRanking.concat([entry]));
-  const pos = sorted.indexOf(entry) + 1;
-  myRanking = sorted.slice(0, RANKING_LIMIT);
+  const pos = sortRanking(RANKING_SEED.concat(myRanking, [entry])).indexOf(entry) + 1;
+  myRanking = sortRanking(myRanking.concat([entry])).slice(0, RANKING_LIMIT);
   savePref('vincol-ranking', myRanking);
   return pos;
 }
@@ -1810,7 +2003,7 @@ function endGame(winner) {
     const pos = addToRanking(entry);
     title = 'Você venceu!';
     icon = 'trophy';
-    detail = `Nível <b>${level}</b> em <b>${time}</b><br>Você está em <b>${pos}º lugar</b> no ranking deste aparelho`;
+    detail = `Nível <b>${level}</b> em <b>${time}</b><br>Você está em <b>${pos}º lugar</b> no ranking`;
   } else if (vsAI) {
     title = 'A IA venceu';
     icon = 'sad';
@@ -1899,13 +2092,21 @@ renderer.domElement.addEventListener('pointerup', (e) => {
   mouse.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster.setFromCamera(mouse, camera);
 
+  // Casa de destino válida sob o dedo. Destinos estão sempre vazios, então se o toque
+  // também pegou um pneu, é um pneu de outra casa "na frente" (câmera baixa): o lance vence.
+  const tileHit = raycaster.intersectObjects(boardGroup.children, false)[0];
+  const t = tileHit && tileHit.object.userData;
+  const targetMove =
+    selectedPiece && t && t.type === 'tile' && validMoves.find((m) => m.toR === t.r && m.toC === t.c);
+
   if (chainPiece) {
-    // Captura em cadeia é opcional: tocar num destino válido continua, qualquer outro toque encerra
-    const tileHit = raycaster.intersectObjects(boardGroup.children, false)[0];
-    const t = tileHit && tileHit.object.userData;
-    const move = t && t.type === 'tile' && validMoves.find((m) => m.toR === t.r && m.toC === t.c);
-    if (move) executeMove(move);
-    else passTurn();
+    // Captura em cadeia é opcional, mas só termina pelo botão: um toque perdido não passa a vez
+    if (targetMove) executeMove(targetMove);
+    else setToast('Toque numa casa vermelha para capturar de novo, ou em "Encerrar jogada".');
+    return;
+  }
+  if (targetMove) {
+    executeMove(targetMove);
     return;
   }
 
@@ -1924,13 +2125,16 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     }
   }
 
-  const tileHits = raycaster.intersectObjects(boardGroup.children, false);
-  if (tileHits.length > 0 && selectedPiece) {
-    const hit = tileHits[0].object.userData;
-    const move = hit.type === 'tile' && validMoves.find((m) => m.toR === hit.r && m.toC === hit.c);
-    if (move) executeMove(move);
-    else selectPiece(null); // toque fora: desmarca
-  }
+  if (tileHit && selectedPiece) selectPiece(null); // toque fora: desmarca
+});
+
+// Botão que encerra a captura em cadeia do jogador
+const btnEndChain = $('btn-end-chain');
+function setChainButton(visible) {
+  btnEndChain.classList.toggle('hidden', !visible);
+}
+btnEndChain.addEventListener('click', () => {
+  if (chainPiece && !inputLocked && !isAITurn() && !gameOver) passTurn();
 });
 
 // --- Desfazer (contra a IA custa +10s no tempo do ranking) ---
@@ -2152,11 +2356,31 @@ refreshStartUI();
 // ============================================================================
 // 10. LOOP DE RENDERIZAÇÃO (SOB DEMANDA) E ANIMAÇÃO IDLE
 // ============================================================================
+// iOS/Android podem descartar o WebGL quando o jogo fica em segundo plano. O Three.js
+// restaura sozinho quando o navegador devolve o contexto; se isso não acontecer, recarrega.
+let contextLostTimer = null;
+renderer.domElement.addEventListener('webglcontextlost', (e) => {
+  e.preventDefault();
+  setToast('Recarregando os gráficos...');
+  contextLostTimer = setTimeout(() => location.reload(), 5000);
+});
+renderer.domElement.addEventListener('webglcontextrestored', () => {
+  clearTimeout(contextLostTimer);
+  setToast('Gráficos restaurados.');
+});
+
+let lastFitAspect = camera.aspect;
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  camState.targetRadius = getFitRadius() * (cameraIndex === 1 ? 1.1 : 1); // reenquadra ao girar a tela
+  // Só reenquadra quando a proporção muda de verdade (girar o celular). Teclado virtual e
+  // barra do navegador mudam pouco a altura e não devem desfazer o zoom do jogador.
+  const aspect = camera.aspect;
+  if (Math.abs(aspect - lastFitAspect) > 0.2) {
+    lastFitAspect = aspect;
+    camState.targetRadius = getFitRadius() * (cameraIndex === 1 ? 1.1 : 1);
+  }
 });
 window.addEventListener('orientationchange', () => {
   setTimeout(() => window.dispatchEvent(new Event('resize')), 200);
@@ -2166,7 +2390,7 @@ initGame();
 openStart();
 
 // Economia de bateria: com tudo parado o celular desenha a 30 fps, e com menu,
-// ranking ou fim de jogo na frente, a 10 fps. Movimentos e efeitos voltam a 60 fps.
+// ranking ou fim de jogo na frente, a 4 fps. Movimentos e efeitos voltam a 60 fps.
 let lastRenderAt = 0;
 function overlayVisible() {
   return (
@@ -2182,7 +2406,7 @@ function animate(now) {
 
   const cameraMoving = updateCameraPosition();
   const busy = cameraMoving || activeAnimations.length > 0 || activeParticles.length > 0 || crowdCheerUntil > 0;
-  const minInterval = busy ? 0 : overlayVisible() ? 100 : isTouchDevice ? 33 : 0;
+  const minInterval = busy ? 0 : overlayVisible() ? 250 : isTouchDevice ? 33 : 0;
   if (now - lastRenderAt < minInterval - 2) return;
   const dt = Math.min(0.1, (now - (lastRenderAt || now)) / 1000);
   lastRenderAt = now;
@@ -2238,6 +2462,44 @@ function animate(now) {
   }
 
   renderer.render(scene, camera);
+  revealArena();
+  adaptQuality(now, busy);
+}
+
+// Qualidade adaptativa: se o aparelho não sustenta ~24 fps durante os movimentos,
+// reduz a resolução em etapas e, por último, desliga as sombras. Nunca volta a subir
+// na mesma sessão, para não ficar oscilando.
+const QUALITY_STEPS = [
+  { ratio: 1.5 },
+  { ratio: 1.25 },
+  { ratio: 1.0 },
+  { ratio: 1.0, noShadows: true }
+];
+let qualityLevel = 0;
+let slowFrames = 0;
+let measuredFrames = 0;
+let lastQualityFrameAt = 0;
+function adaptQuality(now, busy) {
+  const interval = now - lastQualityFrameAt;
+  lastQualityFrameAt = now;
+  // Só mede com animação rodando a toda velocidade (parado o jogo limita de propósito)
+  if (!busy || document.hidden || interval > 500) return;
+  measuredFrames++;
+  if (interval > 42) slowFrames++;
+  if (measuredFrames < 90) return;
+  const tooSlow = slowFrames / measuredFrames > 0.5;
+  measuredFrames = 0;
+  slowFrames = 0;
+  if (!tooSlow || qualityLevel >= QUALITY_STEPS.length - 1) return;
+  qualityLevel++;
+  const step = QUALITY_STEPS[qualityLevel];
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, step.ratio));
+  if (step.noShadows) {
+    renderer.shadowMap.enabled = false;
+    scene.traverse((o) => {
+      if (o.material && !Array.isArray(o.material)) o.material.needsUpdate = true;
+    });
+  }
 }
 
 requestAnimationFrame(animate);
