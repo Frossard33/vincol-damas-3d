@@ -1,6 +1,6 @@
 # Vincol Pneus — Damas 3D
 
-Jogo de damas em 3D, feito para rodar no navegador do celular (Android e iPhone). As peças são pneus em pé que rodam ao andar.
+Jogo de damas em 3D, feito para rodar no navegador do celular (Android e iPhone). As peças são pneus em pé que rodam ao andar, e o tabuleiro fica no centro de um autódromo oval no estilo NASCAR, com arquibancada lotada de pneus torcedores e carros dando voltas na pista.
 
 **Jogar agora:** https://victorfrossard.github.io/vincol-damas-3d/ <!-- ajuste se o usuário/repositório for outro -->
 
@@ -23,16 +23,17 @@ Jogo de damas em 3D, feito para rodar no navegador do celular (Android e iPhone)
 
 - Só vitórias contra a IA entram no ranking. A ordem é pelo nível (o mais difícil vem primeiro) e depois pelo menor tempo.
 - Cada **Desfazer** contra a IA soma **+10 s** ao tempo.
-- O ranking fica salvo **apenas neste aparelho** (`localStorage`). Não existe ranking online.
+- O ranking fica salvo **apenas neste aparelho** (`localStorage`). Não existe ranking online nem jogadores fictícios.
 
 ## Tecnologia
 
 | Item | Detalhe |
 |---|---|
-| 3D | [Three.js r128](https://threejs.org/) via CDN (cdnjs) |
+| 3D | [Three.js r128](https://threejs.org/), cópia local em `vendor/` (se faltar, usa o CDN cdnjs) |
 | IA | Minimax com poda alfa-beta, aprofundamento iterativo e quiescência, rodando num Web Worker (se o Worker falhar, roda na thread principal) |
 | Interface | HTML + CSS puros, sem build, tudo em português |
-| Fontes | Inter e Material Icons Round (Google Fonts) |
+| Fontes e ícones | Inter (Google Fonts, com fonte do sistema como reserva); ícones em SVG embutido |
+| Desempenho | Cerca de 125 draw calls: malhas dos pneus unificadas, torcida com InstancedMesh e renderização a 30 fps quando nada se mexe (10 fps com menu aberto) |
 
 ### Arquivos
 
@@ -44,6 +45,7 @@ Jogo de damas em 3D, feito para rodar no navegador do celular (Android e iPhone)
 | `logo-data.js` | Logo da Vincol embutido em base64 (usado no letreiro 3D, inclusive via `file://`) |
 | `logo-vincol.png` | Logo da tela inicial |
 | `logos.jpg.jpeg` | Favicon |
+| `vendor/three.min.js` | Three.js r128 (licença MIT) |
 
 ## Rodar localmente
 

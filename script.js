@@ -3,8 +3,8 @@
 // ============================================================================
 const container = document.getElementById('canvas-container');
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x111114);
-scene.fog = new THREE.FogExp2(0x111114, 0.014);
+scene.background = new THREE.Color(0x0e1117);
+scene.fog = new THREE.FogExp2(0x0e1117, 0.012);
 
 const camera = new THREE.PerspectiveCamera(
   45,
@@ -13,15 +13,16 @@ const camera = new THREE.PerspectiveCamera(
   200
 );
 
+const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
 const renderer = new THREE.WebGLRenderer({
   antialias: true,
-  powerPreference: 'high-performance'
+  powerPreference: isTouchDevice ? 'default' : 'high-performance'
 });
 renderer.setSize(window.innerWidth, window.innerHeight);
-const isTouchDevice = window.matchMedia('(pointer: coarse)').matches;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, isTouchDevice ? 1.5 : 2));
 renderer.shadowMap.enabled = true;
-renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+// Sombra suave custa caro no celular: lá usamos a versão simples
+renderer.shadowMap.type = isTouchDevice ? THREE.PCFShadowMap : THREE.PCFSoftShadowMap;
 container.appendChild(renderer.domElement);
 
 // Raio ideal da câmera: garante que o tabuleiro caiba na largura da tela (retrato no celular)
@@ -51,19 +52,24 @@ const camState = {
 };
 camState.radius = camState.targetRadius = getFitRadius();
 
+// Devolve true enquanto a câmera ainda está se movendo (usado para economizar quadros)
 function updateCameraPosition() {
-  camState.theta += (camState.targetTheta - camState.theta) * 0.12;
-  camState.phi += (camState.targetPhi - camState.phi) * 0.12;
-  camState.radius += (camState.targetRadius - camState.radius) * 0.12;
+  const dTheta = camState.targetTheta - camState.theta;
+  const dPhi = camState.targetPhi - camState.phi;
+  const dRadius = camState.targetRadius - camState.radius;
+  camState.theta += dTheta * 0.12;
+  camState.phi += dPhi * 0.12;
+  camState.radius += dRadius * 0.12;
 
   camera.position.x = camState.radius * Math.sin(camState.phi) * Math.sin(camState.theta);
   camera.position.y = camState.radius * Math.cos(camState.phi);
   camera.position.z = camState.radius * Math.sin(camState.phi) * Math.cos(camState.theta);
   camera.lookAt(0, 0.4, 0);
+  return Math.abs(dTheta) + Math.abs(dPhi) + Math.abs(dRadius) * 0.05 > 0.0005;
 }
 
 function clampRadius(r) {
-  return Math.max(9, Math.min(Math.max(32, getFitRadius() * 1.3), r));
+  return Math.max(9, Math.min(Math.max(30, getFitRadius() * 1.3), r));
 }
 
 // Ponteiros ativos (suporte a toque com 1 dedo = girar, 2 dedos = pinça/zoom)
@@ -115,7 +121,8 @@ window.addEventListener('pointermove', (e) => {
   }
   if (camState.isDragging) {
     camState.targetTheta -= dx * 0.007;
-    camState.targetPhi = Math.max(0.2, Math.min(1.42, camState.targetPhi - dy * 0.006));
+    // limite inferior evita que a arquibancada fique na frente do tabuleiro
+    camState.targetPhi = Math.max(0.2, Math.min(1.3, camState.targetPhi - dy * 0.006));
   }
   camState.prevX = e.clientX;
   camState.prevY = e.clientY;
@@ -124,6 +131,12 @@ window.addEventListener('pointermove', (e) => {
 function releasePointer(e) {
   activePointers.delete(e.pointerId);
   pinchPrevDist = 0;
+  if (activePointers.size === 1) {
+    // Fim da pinça: o dedo que sobrou continua girando a partir de onde está (sem "pulo")
+    const [rest] = activePointers.values();
+    camState.prevX = rest.x;
+    camState.prevY = rest.y;
+  }
   if (activePointers.size === 0) camState.pointerDown = false;
 }
 window.addEventListener('pointerup', releasePointer);
@@ -139,36 +152,73 @@ renderer.domElement.addEventListener(
 );
 
 // ============================================================================
-// 2. ILUMINAÇÃO
+// 2. ILUMINAÇÃO (refletores de estádio, sem luzes pontuais para poupar o celular)
 // ============================================================================
-const ambientLight = new THREE.AmbientLight(0xffffff, 0.7);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
 scene.add(ambientLight);
 
-const hemiLight = new THREE.HemisphereLight(0xffffff, 0x222226, 1.15);
+const hemiLight = new THREE.HemisphereLight(0xe3ecff, 0x1c1f24, 1.0);
 hemiLight.position.set(0, 25, 0);
 scene.add(hemiLight);
 
-const mainLight = new THREE.DirectionalLight(0xfff0dd, 1.55);
+const mainLight = new THREE.DirectionalLight(0xfff4e6, 1.6);
 mainLight.position.set(8, 18, 10);
 mainLight.castShadow = true;
 mainLight.shadow.mapSize.width = isTouchDevice ? 1024 : 2048;
 mainLight.shadow.mapSize.height = isTouchDevice ? 1024 : 2048;
 mainLight.shadow.camera.near = 2;
 mainLight.shadow.camera.far = 45;
-const d = 10;
-mainLight.shadow.camera.left = -d;
-mainLight.shadow.camera.right = d;
-mainLight.shadow.camera.top = d;
-mainLight.shadow.camera.bottom = -d;
+const SHADOW_HALF = 7;
+mainLight.shadow.camera.left = -SHADOW_HALF;
+mainLight.shadow.camera.right = SHADOW_HALF;
+mainLight.shadow.camera.top = SHADOW_HALF;
+mainLight.shadow.camera.bottom = -SHADOW_HALF;
 scene.add(mainLight);
 
-const rimLight = new THREE.DirectionalLight(0xffd0d0, 0.8);
+const rimLight = new THREE.DirectionalLight(0xffd0d0, 0.7);
 rimLight.position.set(-10, 12, -10);
 scene.add(rimLight);
 
 // ============================================================================
-// 3. TEXTURAS PROCEDURAIS DO TABULEIRO
+// 3. UTILITÁRIOS DE GEOMETRIA E TEXTURAS PROCEDURAIS
 // ============================================================================
+const tmpQuat = new THREE.Quaternion();
+const tmpEuler = new THREE.Euler();
+
+function makeMatrix(pos = [0, 0, 0], rot = [0, 0, 0], scale = [1, 1, 1]) {
+  tmpQuat.setFromEuler(tmpEuler.set(rot[0], rot[1], rot[2]));
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(pos[0], pos[1], pos[2]),
+    tmpQuat,
+    new THREE.Vector3(scale[0], scale[1], scale[2])
+  );
+}
+
+// Junta várias geometrias numa só (1 draw call em vez de dezenas). parts: [[geometria, matriz], ...]
+function mergeGeometries(parts) {
+  const chunks = parts.map(([geo, matrix]) => {
+    let g = geo.clone();
+    if (matrix) g.applyMatrix4(matrix);
+    if (g.index) g = g.toNonIndexed();
+    return g;
+  });
+  const total = chunks.reduce((n, g) => n + g.attributes.position.count, 0);
+  const pos = new Float32Array(total * 3);
+  const nor = new Float32Array(total * 3);
+  let offset = 0;
+  chunks.forEach((g) => {
+    pos.set(g.attributes.position.array, offset);
+    nor.set(g.attributes.normal.array, offset);
+    offset += g.attributes.position.count * 3;
+    g.dispose();
+  });
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  merged.computeBoundingSphere();
+  return merged;
+}
+
 function createStoneTexture(isMarble) {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
@@ -201,36 +251,280 @@ function createStoneTexture(isMarble) {
   return tex;
 }
 
+function createCheckerTexture() {
+  const cv = document.createElement('canvas');
+  cv.width = 64;
+  cv.height = 256;
+  const g = cv.getContext('2d');
+  const s = 32;
+  for (let y = 0; y < cv.height / s; y++) {
+    for (let x = 0; x < cv.width / s; x++) {
+      g.fillStyle = (x + y) % 2 ? '#111' : '#f5f5f5';
+      g.fillRect(x * s, y * s, s, s);
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.magFilter = THREE.NearestFilter;
+  return tex;
+}
+
 const marbleTex = createStoneTexture(true);
 const obsidianTex = createStoneTexture(false);
 
 // ============================================================================
-// 4. CENÁRIO (GALPÃO, LETREIRO VINCOL E PILHAS DE PNEUS)
+// 4. CENÁRIO: AUTÓDROMO OVAL (ESTILO NASCAR) COM ARQUIBANCADA LOTADA DE PNEUS
 // ============================================================================
-const cathedralGroup = new THREE.Group();
-scene.add(cathedralGroup);
+// O tabuleiro fica no centro do oval, sobre um pódio. Ao redor: grama, pista com
+// zebras, muro, arquibancada em degraus com uma "torcida" de pneus e carros correndo.
+const arenaGroup = new THREE.Group();
+scene.add(arenaGroup);
 
-const stoneMat = new THREE.MeshStandardMaterial({
-  color: 0x1b1b1f,
-  roughness: 0.9,
-  metalness: 0.05
-});
+const GROUND_Y = -2.2;
+const TRACK_HALF = 7;      // metade do comprimento das retas
+const TRACK_IN = 8.6;      // raio interno do oval
+const TRACK_OUT = 13;      // raio externo do oval
+const STAND_START = TRACK_OUT + 0.6;
+const STAND_TIERS = 6;
+const STAND_DEPTH = 1.05;  // profundidade de cada degrau
+const STAND_RISE = 0.55;   // altura de cada degrau
 
-// Piso e base do tabuleiro
-const floorMesh = new THREE.Mesh(new THREE.CylinderGeometry(28, 28, 0.5, 48), stoneMat);
-floorMesh.position.y = -2.25;
-floorMesh.receiveShadow = true;
-cathedralGroup.add(floorMesh);
+// Contorno de um oval "estádio" (2 retas + 2 curvas), retas paralelas ao eixo X.
+// Coordenadas 2D (x, y) da Shape; depois de deitada no chão, y vira -z.
+function ovalPoints(radius, segs = 28) {
+  const pts = [];
+  for (let i = 0; i <= segs; i++) {
+    const a = -Math.PI / 2 + (i / segs) * Math.PI;
+    pts.push(new THREE.Vector2(TRACK_HALF + Math.cos(a) * radius, Math.sin(a) * radius));
+  }
+  for (let i = 0; i <= segs; i++) {
+    const a = Math.PI / 2 + (i / segs) * Math.PI;
+    pts.push(new THREE.Vector2(-TRACK_HALF + Math.cos(a) * radius, Math.sin(a) * radius));
+  }
+  return pts;
+}
 
-const altarMesh = new THREE.Mesh(
+function ovalShape(radius) {
+  return new THREE.Shape(ovalPoints(radius));
+}
+
+function ovalRingShape(rIn, rOut) {
+  const shape = ovalShape(rOut);
+  shape.holes.push(new THREE.Path(ovalPoints(rIn).reverse()));
+  return shape;
+}
+
+// Ponto e direção ao longo do oval (distância d percorrida, sentido anti-horário visto de cima)
+function ovalPointAt(d, radius, out) {
+  const straight = TRACK_HALF * 2;
+  const curve = Math.PI * radius;
+  const lap = 2 * straight + 2 * curve;
+  d = ((d % lap) + lap) % lap;
+  if (d < straight) {
+    out.set(-TRACK_HALF + d, 0, radius);
+  } else if (d < straight + curve) {
+    const a = (d - straight) / radius;
+    out.set(TRACK_HALF + Math.sin(a) * radius, 0, Math.cos(a) * radius);
+  } else if (d < 2 * straight + curve) {
+    out.set(TRACK_HALF - (d - straight - curve), 0, -radius);
+  } else {
+    const a = (d - 2 * straight - curve) / radius;
+    out.set(-TRACK_HALF - Math.sin(a) * radius, 0, -Math.cos(a) * radius);
+  }
+  return out;
+}
+
+function ovalLength(radius) {
+  return 4 * TRACK_HALF + 2 * Math.PI * radius;
+}
+
+function flatOval(shape, mat, y) {
+  const mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape, 28), mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = y;
+  arenaGroup.add(mesh);
+  return mesh;
+}
+
+function extrudedOval(shape, height, mat, y) {
+  const geo = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, curveSegments: 28 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.rotation.x = -Math.PI / 2;
+  mesh.position.y = y;
+  arenaGroup.add(mesh);
+  return mesh;
+}
+
+// Chão ao redor e grama do miolo
+const groundMesh = new THREE.Mesh(
+  new THREE.CircleGeometry(60, 48),
+  new THREE.MeshLambertMaterial({ color: 0x15171c })
+);
+groundMesh.rotation.x = -Math.PI / 2;
+groundMesh.position.y = GROUND_Y - 0.02;
+arenaGroup.add(groundMesh);
+
+flatOval(ovalShape(TRACK_IN), new THREE.MeshLambertMaterial({ color: 0x0d3511 }), GROUND_Y);
+
+// Asfalto e faixas brancas
+flatOval(ovalRingShape(TRACK_IN, TRACK_OUT), new THREE.MeshLambertMaterial({ color: 0x1e2024 }), GROUND_Y + 0.005);
+const lineMat = new THREE.MeshBasicMaterial({ color: 0xe8e8e8 });
+flatOval(ovalRingShape(TRACK_IN + 0.12, TRACK_IN + 0.26), lineMat, GROUND_Y + 0.01);
+flatOval(ovalRingShape(TRACK_OUT - 0.26, TRACK_OUT - 0.12), lineMat, GROUND_Y + 0.01);
+
+// Linha de chegada quadriculada na reta oposta
+const finishLine = new THREE.Mesh(
+  new THREE.PlaneGeometry(0.9, TRACK_OUT - TRACK_IN),
+  new THREE.MeshBasicMaterial({ map: createCheckerTexture() })
+);
+finishLine.rotation.x = -Math.PI / 2;
+finishLine.position.set(0, GROUND_Y + 0.012, -(TRACK_IN + TRACK_OUT) / 2);
+arenaGroup.add(finishLine);
+
+// Zebras vermelho/branco na parte de dentro das curvas (1 draw call)
+{
+  const perCurve = 22;
+  const curbs = new THREE.InstancedMesh(
+    new THREE.BoxGeometry(0.62, 0.06, 0.3),
+    new THREE.MeshLambertMaterial({ color: 0xffffff }),
+    perCurve * 2
+  );
+  const dummy = new THREE.Object3D();
+  const red = new THREE.Color(0xff3131);
+  const white = new THREE.Color(0xf2f2f2);
+  const r = TRACK_IN - 0.18;
+  let n = 0;
+  [1, -1].forEach((side) => {
+    for (let i = 0; i < perCurve; i++) {
+      const a = -Math.PI / 2 + ((i + 0.5) / perCurve) * Math.PI;
+      const x = side * (TRACK_HALF + Math.cos(a) * r);
+      const z = Math.sin(a) * r;
+      dummy.position.set(x, GROUND_Y + 0.03, z);
+      // eixo comprido da zebra acompanha a curva (perpendicular ao raio)
+      dummy.rotation.set(0, Math.atan2(x - side * TRACK_HALF, z), 0);
+      dummy.updateMatrix();
+      curbs.setMatrixAt(n, dummy.matrix);
+      curbs.setColorAt(n, i % 2 ? red : white);
+      n++;
+    }
+  });
+  arenaGroup.add(curbs);
+}
+
+// Muro de proteção (branco com faixa vermelha da Vincol)
+extrudedOval(ovalRingShape(TRACK_OUT, TRACK_OUT + 0.3), 0.6, new THREE.MeshLambertMaterial({ color: 0x8d8f94 }), GROUND_Y);
+extrudedOval(ovalRingShape(TRACK_OUT - 0.02, TRACK_OUT + 0.32), 0.14, new THREE.MeshLambertMaterial({ color: 0xff3131 }), GROUND_Y + 0.6);
+
+// Arquibancada em degraus: todos os degraus juntos numa única malha
+{
+  const parts = [];
+  for (let k = 0; k < STAND_TIERS; k++) {
+    const rIn = STAND_START + k * STAND_DEPTH;
+    const geo = new THREE.ExtrudeGeometry(ovalRingShape(rIn, rIn + STAND_DEPTH), {
+      depth: STAND_RISE * (k + 1),
+      bevelEnabled: false,
+      curveSegments: 28
+    });
+    parts.push([geo, makeMatrix([0, GROUND_Y, 0], [-Math.PI / 2, 0, 0])]);
+  }
+  const stands = new THREE.Mesh(mergeGeometries(parts), new THREE.MeshLambertMaterial({ color: 0x1b1d22 }));
+  parts.forEach(([geo]) => geo.dispose());
+  arenaGroup.add(stands);
+}
+
+// Torcida de pneus: centenas de pneus em pé olhando para a pista (2 draw calls no total)
+const crowd = { tires: null, rims: null, base: [], count: 0 };
+{
+  const spots = [];
+  const p = new THREE.Vector3();
+  const q = new THREE.Vector3();
+  for (let k = 0; k < STAND_TIERS; k++) {
+    const r = STAND_START + k * STAND_DEPTH + STAND_DEPTH * 0.5;
+    const len = ovalLength(r);
+    const n = Math.floor(len / (isTouchDevice ? 1.05 : 0.78)); // menos pneus no celular
+    for (let i = 0; i < n; i++) {
+      const d = (i + (k % 2) * 0.5) * (len / n);
+      ovalPointAt(d, r, p);
+      ovalPointAt(d + 0.05, r, q);
+      // normal para dentro do oval (perpendicular à direção do contorno)
+      const tx = q.x - p.x;
+      const tz = q.z - p.z;
+      const tl = Math.hypot(tx, tz) || 1;
+      spots.push({ x: p.x, z: p.z, nx: tz / tl, nz: -tx / tl, y: GROUND_Y + STAND_RISE * (k + 1) });
+    }
+  }
+
+  crowd.count = spots.length;
+  const tireGeoCrowd = new THREE.TorusGeometry(0.27, 0.11, isTouchDevice ? 4 : 6, isTouchDevice ? 10 : 12);
+  const rimGeoCrowd = new THREE.CylinderGeometry(0.17, 0.17, 0.08, 8);
+  rimGeoCrowd.rotateX(Math.PI / 2);
+  crowd.tires = new THREE.InstancedMesh(tireGeoCrowd, new THREE.MeshLambertMaterial({ color: 0x1e1f24 }), crowd.count);
+  crowd.rims = new THREE.InstancedMesh(rimGeoCrowd, new THREE.MeshLambertMaterial({ color: 0xffffff }), crowd.count);
+  const palette = [0xff3131, 0xdde3ea, 0xffd54f, 0x42a5f5, 0xffffff, 0xff3131, 0x66bb6a];
+  const color = new THREE.Color();
+  const dummy = new THREE.Object3D();
+  spots.forEach((s, i) => {
+    const scale = 0.85 + Math.random() * 0.3;
+    dummy.position.set(s.x, s.y + 0.38 * scale, s.z);
+    dummy.lookAt(s.x + s.nx, s.y + 0.38 * scale, s.z + s.nz);
+    dummy.rotateY((Math.random() - 0.5) * 0.5);
+    dummy.scale.setScalar(scale);
+    dummy.updateMatrix();
+    crowd.tires.setMatrixAt(i, dummy.matrix);
+    crowd.rims.setMatrixAt(i, dummy.matrix);
+    crowd.rims.setColorAt(i, color.setHex(palette[i % palette.length]));
+    crowd.base.push({ matrix: dummy.matrix.clone(), phase: Math.random() * Math.PI * 2 });
+  });
+  arenaGroup.add(crowd.tires, crowd.rims);
+}
+
+// A torcida pula de alegria por alguns segundos (chamado nas capturas e no fim do jogo)
+let crowdCheerUntil = 0;
+const cheerMatrix = new THREE.Matrix4();
+function cheerCrowd(ms = 1600) {
+  crowdCheerUntil = Math.max(crowdCheerUntil, performance.now() + ms);
+}
+function updateCrowd(now) {
+  if (crowdCheerUntil === 0) return false;
+  const active = now < crowdCheerUntil;
+  for (let i = 0; i < crowd.count; i++) {
+    const b = crowd.base[i];
+    cheerMatrix.copy(b.matrix);
+    if (active) cheerMatrix.elements[13] += Math.abs(Math.sin(now * 0.012 + b.phase)) * 0.22;
+    crowd.tires.setMatrixAt(i, cheerMatrix);
+    crowd.rims.setMatrixAt(i, cheerMatrix);
+  }
+  crowd.tires.instanceMatrix.needsUpdate = true;
+  crowd.rims.instanceMatrix.needsUpdate = true;
+  if (!active) crowdCheerUntil = 0; // volta todos ao lugar e para de atualizar
+  return true;
+}
+
+// Torres de iluminação nos quatro cantos
+{
+  const poles = [];
+  const panels = [];
+  const towerX = TRACK_HALF + STAND_START + 3.2;
+  const towerZ = STAND_START + 3.2;
+  [[1, 1], [-1, 1], [1, -1], [-1, -1]].forEach(([sx, sz]) => {
+    const x = sx * towerX * 0.82;
+    const z = sz * towerZ * 1.05;
+    poles.push([new THREE.CylinderGeometry(0.14, 0.2, 11, 8), makeMatrix([x, GROUND_Y + 5.5, z])]);
+    panels.push([new THREE.BoxGeometry(2.2, 1.1, 0.25), makeMatrix([x, GROUND_Y + 11.2, z], [-0.35 * sz, Math.atan2(x, z), 0])]);
+  });
+  arenaGroup.add(new THREE.Mesh(mergeGeometries(poles), new THREE.MeshLambertMaterial({ color: 0x5b5f68 })));
+  arenaGroup.add(new THREE.Mesh(mergeGeometries(panels), new THREE.MeshBasicMaterial({ color: 0xfff6d8 })));
+}
+
+// Pódio do tabuleiro no centro do oval
+const podiumMesh = new THREE.Mesh(
   new THREE.BoxGeometry(11.4, 2.0, 11.4),
   new THREE.MeshStandardMaterial({ color: 0x26262c, roughness: 0.75, metalness: 0.1 })
 );
-altarMesh.position.y = -1.15;
-altarMesh.receiveShadow = true;
-cathedralGroup.add(altarMesh);
+podiumMesh.position.y = -1.15;
+podiumMesh.receiveShadow = true;
+arenaGroup.add(podiumMesh);
 
-// Letreiro com o logo oficial da Vincol (imagem embutida em logo-data.js)
+// Telão com o logo oficial da Vincol (imagem embutida em logo-data.js) acima da arquibancada oposta
 function createSignTexture() {
   const cv = document.createElement('canvas');
   cv.width = 1024;
@@ -262,53 +556,62 @@ function createSignTexture() {
   return tex;
 }
 
-const signGroup = new THREE.Group();
-signGroup.position.set(0, 3.6, -9.5);
-signGroup.rotation.x = 0.08;
-cathedralGroup.add(signGroup);
-signGroup.add(
-  new THREE.Mesh(
-    new THREE.PlaneGeometry(8.4, 3.6),
+{
+  const signZ = -(STAND_START + STAND_TIERS * STAND_DEPTH + 0.6);
+  const signY = GROUND_Y + STAND_RISE * STAND_TIERS + 2.6;
+  const sign = new THREE.Mesh(
+    new THREE.PlaneGeometry(8.4 * 1.3, 3.6 * 1.3),
     new THREE.MeshBasicMaterial({ map: createSignTexture() })
-  )
-);
+  );
+  sign.position.set(0, signY, signZ);
+  arenaGroup.add(sign);
+  const legs = mergeGeometries([
+    [new THREE.BoxGeometry(0.25, signY - GROUND_Y, 0.25), makeMatrix([-4, (signY + GROUND_Y) / 2, signZ - 0.2])],
+    [new THREE.BoxGeometry(0.25, signY - GROUND_Y, 0.25), makeMatrix([4, (signY + GROUND_Y) / 2, signZ - 0.2])]
+  ]);
+  arenaGroup.add(new THREE.Mesh(legs, new THREE.MeshLambertMaterial({ color: 0x3a3d44 })));
+}
 
-// 4 pilhas de pneus com lâmpadas de oficina
-const candleLights = [];
-const candleFlames = [];
-const cornerCoords = [
-  [-5.6, -5.6],
-  [5.6, -5.6],
-  [-5.6, 5.6],
-  [5.6, 5.6]
-];
+// Carros de corrida dando voltas na pista
+const raceCars = [];
+{
+  const wheelParts = [];
+  [[-0.32, 0.42], [0.32, 0.42], [-0.32, -0.42], [0.32, -0.42]].forEach(([x, z]) => {
+    wheelParts.push([new THREE.CylinderGeometry(0.13, 0.13, 0.1, 12), makeMatrix([x, 0.13, z], [0, 0, Math.PI / 2])]);
+  });
+  const carWheelGeo = mergeGeometries(wheelParts);
+  const carBodyGeo = mergeGeometries([
+    [new THREE.BoxGeometry(0.6, 0.2, 1.3), makeMatrix([0, 0.24, 0])],
+    [new THREE.BoxGeometry(0.46, 0.18, 0.55), makeMatrix([0, 0.43, -0.08])],
+    [new THREE.BoxGeometry(0.62, 0.05, 0.14), makeMatrix([0, 0.42, -0.62])]
+  ]);
+  const carWheelMat = new THREE.MeshLambertMaterial({ color: 0x15151a });
+  [
+    { color: 0xff3131, lane: TRACK_IN + 1.3, speed: 5.2, start: 0 },
+    { color: 0xffd54f, lane: TRACK_OUT - 1.4, speed: 4.6, start: 9 },
+    { color: 0x42a5f5, lane: TRACK_IN + 2.4, speed: 4.9, start: 30 }
+  ].forEach((cfg) => {
+    const car = new THREE.Group();
+    car.add(new THREE.Mesh(carBodyGeo, new THREE.MeshLambertMaterial({ color: cfg.color })));
+    car.add(new THREE.Mesh(carWheelGeo, carWheelMat));
+    car.position.y = GROUND_Y + 0.01;
+    arenaGroup.add(car);
+    raceCars.push({ car, ...cfg });
+  });
+}
 
-const rubberMat = new THREE.MeshStandardMaterial({
-  color: 0x1a1a1f,
-  roughness: 0.85,
-  metalness: 0.05
-});
-const flameMat = new THREE.MeshBasicMaterial({ color: 0xfff3c4 });
-
-cornerCoords.forEach(([cx, cz]) => {
-  for (let i = 0; i < 4; i++) {
-    const stackTire = new THREE.Mesh(new THREE.TorusGeometry(0.42, 0.2, 12, 28), rubberMat);
-    stackTire.rotation.x = Math.PI / 2;
-    stackTire.position.set(cx, -0.1 + i * 0.36, cz);
-    stackTire.castShadow = true;
-    cathedralGroup.add(stackTire);
-  }
-
-  const flame = new THREE.Mesh(new THREE.SphereGeometry(0.2, 12, 12), flameMat);
-  flame.position.set(cx, 1.55, cz);
-  cathedralGroup.add(flame);
-  candleFlames.push(flame);
-
-  const pLight = new THREE.PointLight(0xffa726, 1.1, 14);
-  pLight.position.set(cx, 1.8, cz);
-  cathedralGroup.add(pLight);
-  candleLights.push(pLight);
-});
+const carPos = new THREE.Vector3();
+const carAhead = new THREE.Vector3();
+function updateRaceCars(time) {
+  raceCars.forEach((rc) => {
+    const d = rc.start + time * rc.speed;
+    ovalPointAt(d, rc.lane, carPos);
+    ovalPointAt(d + 0.4, rc.lane, carAhead);
+    rc.car.position.x = carPos.x;
+    rc.car.position.z = carPos.z;
+    rc.car.lookAt(carAhead.x, rc.car.position.y, carAhead.z);
+  });
+}
 
 // ============================================================================
 // 5. TABULEIRO PROFISSIONAL 8x8
@@ -338,19 +641,37 @@ const darkTileMat = new THREE.MeshStandardMaterial({
   metalness: 0.15
 });
 
+// Casas claras nunca são jogáveis: viram uma única malha. As escuras ficam separadas
+// porque cada uma acende sozinha (destaque de jogada) e recebe o toque.
 const tileMeshes = [];
+const lightTileParts = [];
 for (let r = 0; r < 8; r++) {
   tileMeshes[r] = [];
   for (let c = 0; c < 8; c++) {
-    const isPlayable = (r + c) % 2 === 1;
-    const mat = isPlayable ? darkTileMat.clone() : lightTileMat;
-    const tile = new THREE.Mesh(tileGeo, mat);
-    tile.position.set(c - 3.5, 0.04, r - 3.5);
-    tile.receiveShadow = true;
-    tile.userData = { type: 'tile', r, c };
-    boardGroup.add(tile);
-    tileMeshes[r][c] = tile;
+    if ((r + c) % 2 === 1) {
+      const tile = new THREE.Mesh(tileGeo, darkTileMat.clone());
+      tile.position.set(c - 3.5, 0.04, r - 3.5);
+      tile.receiveShadow = true;
+      tile.userData = { type: 'tile', r, c };
+      boardGroup.add(tile);
+      tileMeshes[r][c] = tile;
+    } else {
+      lightTileParts.push([tileGeo, makeMatrix([c - 3.5, 0.04, r - 3.5])]);
+      tileMeshes[r][c] = null;
+    }
   }
+}
+{
+  // UV some no merge: recria UVs simples por casa para manter a textura de mármore
+  const merged = mergeGeometries(lightTileParts);
+  const uv = new Float32Array(merged.attributes.position.count * 2);
+  const one = tileGeo.toNonIndexed().attributes.uv.array;
+  for (let i = 0; i < uv.length; i += one.length) uv.set(one, i);
+  merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  const lightTiles = new THREE.Mesh(merged, lightTileMat);
+  lightTiles.receiveShadow = true;
+  lightTiles.userData = { type: 'board' };
+  boardGroup.add(lightTiles);
 }
 
 function boardToWorld(r, c) {
@@ -371,6 +692,7 @@ const activeParticles = [];
 
 // Pneus em pé, como se estivessem rodando na estrada.
 // Hierarquia: peça (posição no tabuleiro) → yaw (direção) → roda (gira no eixo Z ao rolar)
+// Cada pneu tem só 3 malhas visíveis (borracha, roda e halo) + a coroa quando vira dama.
 const TIRE_RADIUS = 0.37; // raio externo: usado para calcular quanto a roda gira ao andar
 const rubberPieceMat = new THREE.MeshStandardMaterial({
   color: 0x1f1f24,
@@ -386,70 +708,48 @@ const crownMatWhite = new THREE.MeshStandardMaterial({
 const crownMatRed = new THREE.MeshStandardMaterial({
   color: 0xffd54f, emissive: 0xff1744, emissiveIntensity: 0.45, roughness: 0.2, metalness: 0.75
 });
-const tireGeo = new THREE.TorusGeometry(0.27, 0.1, 16, 36);
-const treadGeo = new THREE.BoxGeometry(0.03, 0.07, 0.3);
-const rimRingGeo = new THREE.TorusGeometry(0.19, 0.025, 8, 28);
-const spokeGeo = new THREE.BoxGeometry(0.035, 0.36, 0.05);
-const hubGeo = new THREE.CylinderGeometry(0.055, 0.055, 0.24, 12);
+
+// Borracha: banda de rodagem + 14 gomos (deixam visível o pneu girando)
+const tireRubberGeo = (() => {
+  const parts = [[new THREE.TorusGeometry(0.27, 0.1, 12, 30), makeMatrix([0, 0, 0], [0, 0, 0], [1, 1, 1.6])]];
+  const block = new THREE.BoxGeometry(0.03, 0.07, 0.3);
+  for (let i = 0; i < 14; i++) {
+    const a = (i / 14) * Math.PI * 2;
+    parts.push([block, makeMatrix([Math.cos(a) * 0.358, Math.sin(a) * 0.358, 0], [0, 0, a])]);
+  }
+  return mergeGeometries(parts);
+})();
+// Roda: aro + 5 raios + cubo
+const tireRimGeo = (() => {
+  const parts = [[new THREE.TorusGeometry(0.19, 0.025, 8, 28), makeMatrix([0, 0, 0], [0, 0, 0], [1, 1, 4])]];
+  const spoke = new THREE.BoxGeometry(0.035, 0.36, 0.05);
+  for (let i = 0; i < 5; i++) parts.push([spoke, makeMatrix([0, 0, 0], [0, 0, (i / 5) * Math.PI])]);
+  parts.push([new THREE.CylinderGeometry(0.055, 0.055, 0.24, 12), makeMatrix([0, 0, 0], [Math.PI / 2, 0, 0])]);
+  return mergeGeometries(parts);
+})();
+// Coroa: aro + 5 pontas + joia
+const crownGeo = (() => {
+  const parts = [[new THREE.TorusGeometry(0.17, 0.035, 10, 28), makeMatrix([0, 0, 0], [Math.PI / 2, 0, 0])]];
+  const spike = new THREE.ConeGeometry(0.045, 0.15, 6);
+  for (let i = 0; i < 5; i++) {
+    const a = (i / 5) * Math.PI * 2;
+    parts.push([spike, makeMatrix([Math.cos(a) * 0.17, 0.09, Math.sin(a) * 0.17])]);
+  }
+  parts.push([new THREE.OctahedronGeometry(0.1, 0), makeMatrix([0, 0.14, 0])]);
+  return mergeGeometries(parts);
+})();
 const haloGeo = new THREE.RingGeometry(0.33, 0.4, 36);
 const hitGeo = new THREE.CylinderGeometry(0.46, 0.46, 0.85, 12);
 const hitMat = new THREE.MeshBasicMaterial({ visible: false });
-const crownBandGeo = new THREE.TorusGeometry(0.17, 0.035, 10, 28);
-const crownSpikeGeo = new THREE.ConeGeometry(0.045, 0.15, 6);
-const crownGemGeo = new THREE.OctahedronGeometry(0.1, 0);
 
 function buildWheel(rimMat) {
   const wheel = new THREE.Group();
-
-  // Banda de rodagem (toro alargado no eixo do pneu)
-  const tread = new THREE.Mesh(tireGeo, rubberPieceMat);
-  tread.scale.z = 1.6;
-  tread.castShadow = true;
-  tread.receiveShadow = true;
-  wheel.add(tread);
-
-  // Gomos da banda de rodagem: deixam visível o pneu girando
-  for (let i = 0; i < 14; i++) {
-    const a = (i / 14) * Math.PI * 2;
-    const block = new THREE.Mesh(treadGeo, rubberPieceMat);
-    block.position.set(Math.cos(a) * 0.358, Math.sin(a) * 0.358, 0);
-    block.rotation.z = a;
-    wheel.add(block);
-  }
-
-  // Roda: aro + 5 raios + cubo
-  const rim = new THREE.Mesh(rimRingGeo, rimMat);
-  rim.scale.z = 4;
-  wheel.add(rim);
-  for (let i = 0; i < 5; i++) {
-    const spoke = new THREE.Mesh(spokeGeo, rimMat);
-    spoke.rotation.z = (i / 5) * Math.PI;
-    wheel.add(spoke);
-  }
-  const hub = new THREE.Mesh(hubGeo, rimMat);
-  hub.rotation.x = Math.PI / 2;
-  wheel.add(hub);
-
+  const rubber = new THREE.Mesh(tireRubberGeo, rubberPieceMat);
+  rubber.castShadow = true;
+  wheel.add(rubber);
+  wheel.add(new THREE.Mesh(tireRimGeo, rimMat));
   wheel.position.y = TIRE_RADIUS;
   return wheel;
-}
-
-function buildCrown(mat) {
-  const crown = new THREE.Group();
-  const band = new THREE.Mesh(crownBandGeo, mat);
-  band.rotation.x = Math.PI / 2;
-  band.castShadow = true;
-  crown.add(band);
-  for (let i = 0; i < 5; i++) {
-    const a = (i / 5) * Math.PI * 2;
-    const spike = new THREE.Mesh(crownSpikeGeo, mat);
-    spike.position.set(Math.cos(a) * 0.17, 0.09, Math.sin(a) * 0.17);
-    crown.add(spike);
-  }
-  const gem = new THREE.Mesh(crownGemGeo, mat);
-  gem.position.y = 0.14;
-  crown.add(gem);
-  return crown;
 }
 
 function createPieceMesh(color, r, c, isKing = false) {
@@ -472,13 +772,14 @@ function createPieceMesh(color, r, c, isKing = false) {
     opacity: 0.85,
     side: THREE.DoubleSide
   });
-  const arcaneRing = new THREE.Mesh(haloGeo, ringMat);
-  arcaneRing.rotation.x = -Math.PI / 2;
-  arcaneRing.position.y = 0.01;
-  group.add(arcaneRing);
+  const halo = new THREE.Mesh(haloGeo, ringMat);
+  halo.rotation.x = -Math.PI / 2;
+  halo.position.y = 0.01;
+  group.add(halo);
 
   // Dama = coroa dourada encaixada no topo do pneu
-  const crownGroup = buildCrown(isWhite ? crownMatWhite : crownMatRed);
+  const crownGroup = new THREE.Mesh(crownGeo, isWhite ? crownMatWhite : crownMatRed);
+  crownGroup.castShadow = true;
   crownGroup.position.y = TIRE_RADIUS * 2 + 0.02;
   crownGroup.visible = isKing;
   group.add(crownGroup);
@@ -498,7 +799,6 @@ function createPieceMesh(color, r, c, isKing = false) {
     isKing,
     yaw,
     wheel,
-    arcaneRing,
     crownGroup,
     ringMat,
     idleOffset: Math.random() * Math.PI * 2,
@@ -507,6 +807,12 @@ function createPieceMesh(color, r, c, isKing = false) {
 
   piecesGroup.add(group);
   return group;
+}
+
+// Remove um pneu da cena e libera o único material exclusivo dele (o do halo)
+function disposePiece(pieceMesh) {
+  if (pieceMesh.parent) pieceMesh.parent.remove(pieceMesh);
+  pieceMesh.userData.ringMat.dispose();
 }
 
 // Vira o pneu para a direção do movimento e o faz rolar conforme anda
@@ -544,7 +850,7 @@ function animateMove(pieceMesh, targetR, targetC, onComplete) {
     roll(ease, t);
 
     if (Math.random() < 0.5) {
-      spawnTrailMote(new THREE.Vector3(pieceMesh.position.x, 0.16, pieceMesh.position.z), 0x9e9e9e);
+      spawnTrailMote(pieceMesh.position.x, pieceMesh.position.z);
     }
 
     if (t >= 1) {
@@ -581,8 +887,9 @@ function animateAttack(attackerMesh, capturedMesh, targetR, targetC, onComplete)
 
     if (t >= 0.48 && !shattered) {
       shattered = true;
-      spawnArcaneStrike(attackerMesh.position.clone(), victimPos.clone().setY(0.4), beamColor);
+      spawnStrikeBeam(attackerMesh.position.clone(), victimPos.clone().setY(0.4), beamColor);
       animateDestruction(capturedMesh);
+      cheerCrowd();
     }
 
     if (t >= 1) {
@@ -597,17 +904,23 @@ function animateAttack(attackerMesh, capturedMesh, targetR, targetC, onComplete)
   });
 }
 
+// Geometrias e materiais dos efeitos são criados uma única vez e reaproveitados
+// (antes cada partícula criava os seus e nada era liberado da memória de vídeo)
+const shardGeo = new THREE.BoxGeometry(0.16, 0.08, 0.1);
+const moteGeo = new THREE.SphereGeometry(0.05, 6, 6);
+const moteMat = new THREE.MeshBasicMaterial({ color: 0x9e9e9e, transparent: true, opacity: 0.8 });
+const waveGeo = new THREE.RingGeometry(0.1, 0.25, 28);
+const MAX_PARTICLES = 160;
+
 // --- ANIMAÇÃO: DESTRUIÇÃO (pneu estourando) ---
 function animateDestruction(victimMesh) {
   const origin = victimMesh.position.clone();
   const isWhite = victimMesh.userData.color === 'white';
-  const shardMat = rubberPieceMat;
   const glowColor = isWhite ? 0xcfd8dc : 0xff5252;
 
-  piecesGroup.remove(victimMesh);
+  disposePiece(victimMesh);
 
   // Onda de choque
-  const waveGeo = new THREE.RingGeometry(0.1, 0.25, 28);
   const waveMat = new THREE.MeshBasicMaterial({
     color: glowColor,
     side: THREE.DoubleSide,
@@ -624,6 +937,7 @@ function animateDestruction(victimMesh) {
     const wt = (now - waveStart) / 450;
     if (wt >= 1) {
       fxGroup.remove(wave);
+      waveMat.dispose();
       return true;
     }
     const s = 1 + wt * 4.5;
@@ -633,9 +947,8 @@ function animateDestruction(victimMesh) {
   });
 
   // Estilhaços 3D com física
-  const shardGeo = new THREE.BoxGeometry(0.16, 0.08, 0.1);
   for (let i = 0; i < 18; i++) {
-    const shard = new THREE.Mesh(shardGeo, shardMat);
+    const shard = new THREE.Mesh(shardGeo, rubberPieceMat);
     shard.position.set(
       origin.x + (Math.random() - 0.5) * 0.3,
       origin.y + 0.25 + Math.random() * 0.4,
@@ -657,12 +970,10 @@ function animateDestruction(victimMesh) {
   }
 }
 
-function spawnTrailMote(pos, colorHex) {
-  const mote = new THREE.Mesh(
-    new THREE.SphereGeometry(0.05, 8, 8),
-    new THREE.MeshBasicMaterial({ color: colorHex, transparent: true, opacity: 0.8 })
-  );
-  mote.position.copy(pos);
+function spawnTrailMote(x, z) {
+  if (activeParticles.length >= MAX_PARTICLES) return;
+  const mote = new THREE.Mesh(moteGeo, moteMat);
+  mote.position.set(x, 0.16, z);
   fxGroup.add(mote);
   activeParticles.push({
     mesh: mote,
@@ -676,7 +987,7 @@ function spawnTrailMote(pos, colorHex) {
   });
 }
 
-function spawnArcaneStrike(fromPos, toPos, colorHex) {
+function spawnStrikeBeam(fromPos, toPos, colorHex) {
   const lineGeo = new THREE.BufferGeometry().setFromPoints([fromPos, toPos]);
   const lineMat = new THREE.LineBasicMaterial({
     color: colorHex,
@@ -690,6 +1001,8 @@ function spawnArcaneStrike(fromPos, toPos, colorHex) {
     const t = (now - start) / 260;
     if (t >= 1) {
       fxGroup.remove(beam);
+      lineGeo.dispose();
+      lineMat.dispose();
       return true;
     }
     lineMat.opacity = 1 - t;
@@ -1052,27 +1365,23 @@ let difficulty = loadPref('vincol-level', 'medio');
 if (!DIFFICULTY[difficulty]) difficulty = 'medio';
 let playerName = loadPref('vincol-nome', '');
 
-// Ranking: só vitórias contra a IA. Ordena por nível (mais difícil primeiro) e depois pelo menor tempo.
+if (typeof playerName !== 'string') playerName = '';
+
+// Ranking: só vitórias contra a IA neste aparelho (não há jogadores fictícios).
+// Ordena por nível (mais difícil primeiro) e depois pelo menor tempo.
 const LEVEL_RANK = { mestre: 4, dificil: 3, medio: 2, facil: 1 };
-const RANKING_SEED = [
-  { nome: 'Rodrigo Valente', nivel: 'mestre', tempoMs: 582000 },
-  { nome: 'Juliana Rocha', nivel: 'mestre', tempoMs: 665000 },
-  { nome: 'Carlos Menezes', nivel: 'dificil', tempoMs: 378000 },
-  { nome: 'Fernanda Lopes', nivel: 'dificil', tempoMs: 422000 },
-  { nome: 'Thiago Pimentel', nivel: 'dificil', tempoMs: 475000 },
-  { nome: 'Diego Barcellos', nivel: 'dificil', tempoMs: 511000 },
-  { nome: 'Camila Teixeira', nivel: 'medio', tempoMs: 252000 },
-  { nome: 'Bruno Siqueira', nivel: 'medio', tempoMs: 280000 },
-  { nome: 'Larissa Monteiro', nivel: 'medio', tempoMs: 309000 },
-  { nome: 'Marcelo Fagundes', nivel: 'medio', tempoMs: 347000 },
-  { nome: 'Aline Cavalcanti', nivel: 'facil', tempoMs: 158000 },
-  { nome: 'Leandro Quintela', nivel: 'facil', tempoMs: 185000 },
-  { nome: 'Bianca Moraes', nivel: 'facil', tempoMs: 201000 },
-  { nome: 'Patrícia Antunes', nivel: 'facil', tempoMs: 230000 },
-  { nome: 'Rafael Duarte', nivel: 'facil', tempoMs: 255000 }
-];
+const RANKING_LIMIT = 50;
 let myRanking = loadPref('vincol-ranking', []);
-if (!Array.isArray(myRanking)) myRanking = [];
+// Descarta entradas corrompidas ou editadas à mão no localStorage
+myRanking = (Array.isArray(myRanking) ? myRanking : []).filter(
+  (e) =>
+    e &&
+    typeof e.nome === 'string' &&
+    LEVEL_RANK[e.nivel] &&
+    Number.isFinite(e.tempoMs) &&
+    e.tempoMs > 0 &&
+    Number.isFinite(e.data)
+);
 
 const $ = (id) => document.getElementById(id);
 const toastEl = $('toast');
@@ -1083,6 +1392,7 @@ const startScreenEl = $('start-screen');
 const rankingScreenEl = $('ranking-screen');
 const btnUndo = $('btn-undo');
 let restartTimer = null;
+let gameOverPending = false; // fim de jogo aconteceu com o menu aberto
 
 // Cronômetro da partida (pausa enquanto o menu está aberto)
 let matchStart = performance.now();
@@ -1117,7 +1427,7 @@ function setToast(msg) {
 }
 
 function firstName(name) {
-  return (name || '').split(' ')[0];
+  return String(name || '').split(' ')[0];
 }
 
 function sideName(color) {
@@ -1149,9 +1459,10 @@ function serializeBoard() {
 
 function resetRound() {
   while (piecesGroup.children.length > 0) {
-    piecesGroup.remove(piecesGroup.children[0]);
+    disposePiece(piecesGroup.children[0]);
   }
   gameEpoch++;
+  gameOverPending = false;
   chainPiece = null;
   aiPlan = [];
   pendingAI = null;
@@ -1266,9 +1577,11 @@ function clearTileHighlights() {
 function highlightMovable() {
   clearTileHighlights();
   const moves = getAllMovesForPlayer(currentTurn);
+  // Um pneu com captura e lance simples fica vermelho: a captura sempre prevalece
+  const canCapture = new Set(moves.filter((m) => m.captured).map((m) => m.piece));
   moves.forEach((m) => {
     const { r, c } = m.piece.userData;
-    tileMeshes[r][c].material.emissive.setHex(m.captured ? 0x5a1414 : 0x23303a);
+    tileMeshes[r][c].material.emissive.setHex(canCapture.has(m.piece) ? 0x5a1414 : 0x23303a);
   });
   return moves;
 }
@@ -1427,8 +1740,13 @@ function playAITurn() {
     if (epoch !== gameEpoch || !isAITurn() || !result) return;
     // Pausa mínima para a jogada da IA não parecer instantânea
     const wait = Math.max(0, 450 - (performance.now() - started));
-    setTimeout(() => {
+    const play = () => {
       if (epoch !== gameEpoch) return;
+      // Com o menu ou o ranking aberto a partida fica pausada: a IA espera
+      if (menuOpen) {
+        setTimeout(play, 250);
+        return;
+      }
       const path = result.move.path;
       const steps = [];
       for (let k = 1; k < path.length; k++) {
@@ -1441,7 +1759,8 @@ function playAITurn() {
         (m) => m.piece === piece && m.toR === first.toR && m.toC === first.toC
       );
       executeMove(mv || getAllMovesForPlayer('black')[0]);
-    }, wait);
+    };
+    setTimeout(play, wait);
   });
 }
 
@@ -1452,13 +1771,21 @@ function sortRanking(list) {
 }
 
 function fullRanking() {
-  return sortRanking(RANKING_SEED.concat(myRanking));
+  return sortRanking(myRanking);
 }
 
+// Devolve a posição da vitória. A posição é calculada antes de cortar a lista,
+// então quem fica fora do top 50 recebe a posição real (ex.: 51º), nunca "0º".
 function addToRanking(entry) {
-  myRanking = sortRanking(myRanking.concat([entry])).slice(0, 50);
+  const sorted = sortRanking(myRanking.concat([entry]));
+  const pos = sorted.indexOf(entry) + 1;
+  myRanking = sorted.slice(0, RANKING_LIMIT);
   savePref('vincol-ranking', myRanking);
-  return fullRanking().indexOf(entry) + 1;
+  return pos;
+}
+
+function setGameOverIcon(name) {
+  $('gameover-icon').querySelector('use').setAttribute('href', `#i-${name}`);
 }
 
 function endGame(winner) {
@@ -1468,7 +1795,6 @@ function endGame(winner) {
   selectedPiece = null;
   clearTileHighlights();
   updateHUD();
-  const epoch = gameEpoch;
   const time = formatTime(finalTimeMs);
   const level = DIFFICULTY[difficulty].label;
 
@@ -1483,22 +1809,35 @@ function endGame(winner) {
     const entry = { nome: playerName, nivel: difficulty, tempoMs: finalTimeMs, data: Date.now(), meu: true };
     const pos = addToRanking(entry);
     title = 'Você venceu!';
-    icon = 'emoji_events';
-    detail = `Nível <b>${level}</b> em <b>${time}</b><br>Você está em <b>${pos}º lugar</b> no ranking`;
+    icon = 'trophy';
+    detail = `Nível <b>${level}</b> em <b>${time}</b><br>Você está em <b>${pos}º lugar</b> no ranking deste aparelho`;
   } else if (vsAI) {
     title = 'A IA venceu';
-    icon = 'sentiment_dissatisfied';
+    icon = 'sad';
     detail = `Nível <b>${level}</b> • Tempo: <b>${time}</b><br>Tente de novo, você consegue!`;
   } else {
     title = `${sideName(winner)} venceu!`;
-    icon = 'emoji_events';
+    icon = 'trophy';
     detail = `Tempo da partida: <b>${time}</b>`;
   }
 
   setToast(title);
   $('gameover-title').textContent = title;
-  $('gameover-icon').textContent = icon;
+  setGameOverIcon(icon);
   $('gameover-detail').innerHTML = detail; // só contém textos fixos, nível e tempo
+  if (winner !== null) cheerCrowd(3000);
+
+  // Se a partida acabou com o menu/ranking aberto, o card aparece só quando ele fechar
+  if (menuOpen) {
+    gameOverPending = true;
+    return;
+  }
+  showGameOver();
+}
+
+function showGameOver() {
+  gameOverPending = false;
+  const epoch = gameEpoch;
   gameoverEl.classList.remove('hidden');
 
   let remaining = AUTO_RESTART_SECONDS;
@@ -1587,14 +1926,10 @@ renderer.domElement.addEventListener('pointerup', (e) => {
 
   const tileHits = raycaster.intersectObjects(boardGroup.children, false);
   if (tileHits.length > 0 && selectedPiece) {
-    const hitTile = tileHits[0].object;
-    if (hitTile.userData && hitTile.userData.type === 'tile') {
-      const move = validMoves.find(
-        (m) => m.toR === hitTile.userData.r && m.toC === hitTile.userData.c
-      );
-      if (move) executeMove(move);
-      else selectPiece(null); // toque fora: desmarca
-    }
+    const hit = tileHits[0].object.userData;
+    const move = hit.type === 'tile' && validMoves.find((m) => m.toR === hit.r && m.toC === hit.c);
+    if (move) executeMove(move);
+    else selectPiece(null); // toque fora: desmarca
   }
 });
 
@@ -1704,6 +2039,7 @@ $('start-form').addEventListener('submit', (e) => {
   vsAI = startMode === 'ai';
   difficulty = startLevel;
   savePref('vincol-level', difficulty);
+  gameOverPending = false; // nova partida: descarta o fim da anterior
   closeStart();
   initGame();
 });
@@ -1725,6 +2061,7 @@ function closeStart() {
   menuOpen = false;
   nameInput.blur();
   startScreenEl.classList.add('hidden');
+  if (gameOverPending && gameOver) showGameOver();
 }
 
 $('btn-menu').addEventListener('click', openStart);
@@ -1813,7 +2150,7 @@ $('btn-close-ranking').addEventListener('click', closeRanking);
 refreshStartUI();
 
 // ============================================================================
-// 10. LOOP DE RENDERIZAÇÃO E ANIMAÇÃO IDLE CONTÍNUA
+// 10. LOOP DE RENDERIZAÇÃO (SOB DEMANDA) E ANIMAÇÃO IDLE
 // ============================================================================
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -1828,11 +2165,28 @@ window.addEventListener('orientationchange', () => {
 initGame();
 openStart();
 
+// Economia de bateria: com tudo parado o celular desenha a 30 fps, e com menu,
+// ranking ou fim de jogo na frente, a 10 fps. Movimentos e efeitos voltam a 60 fps.
+let lastRenderAt = 0;
+function overlayVisible() {
+  return (
+    !startScreenEl.classList.contains('hidden') ||
+    !rankingScreenEl.classList.contains('hidden') ||
+    !gameoverEl.classList.contains('hidden')
+  );
+}
+
 function animate(now) {
   requestAnimationFrame(animate);
-  const time = now * 0.001;
+  if (document.hidden) return;
 
-  updateCameraPosition();
+  const cameraMoving = updateCameraPosition();
+  const busy = cameraMoving || activeAnimations.length > 0 || activeParticles.length > 0 || crowdCheerUntil > 0;
+  const minInterval = busy ? 0 : overlayVisible() ? 100 : isTouchDevice ? 33 : 0;
+  if (now - lastRenderAt < minInterval - 2) return;
+  const dt = Math.min(0.1, (now - (lastRenderAt || now)) / 1000);
+  lastRenderAt = now;
+  const time = now * 0.001;
 
   // ANIMAÇÃO IDLE: pneu parado em pé, halo pulsando e coroa da dama girando
   piecesGroup.children.forEach((piece) => {
@@ -1842,16 +2196,14 @@ function animate(now) {
       piece.position.y = 0.12;
       ud.ringMat.opacity = 0.35 + Math.sin(time * 3.2 + offset) * 0.25;
       // pneu selecionado gira devagar no lugar, como se estivesse acelerando
-      if (piece === selectedPiece) ud.wheel.rotation.z -= 0.06;
+      if (piece === selectedPiece) ud.wheel.rotation.z -= dt * 3.6;
     }
     if (ud.isKing) ud.crownGroup.rotation.y = -time * 1.5;
   });
 
-  // Lâmpadas da oficina piscando de leve
-  candleLights.forEach((light, idx) => {
-    light.intensity = 1.05 + Math.sin(time * 3 + idx * 2) * 0.08;
-    candleFlames[idx].scale.setScalar(1 + Math.sin(time * 3 + idx * 2) * 0.04);
-  });
+  // Carros dando voltas no oval e torcida comemorando
+  updateRaceCars(time);
+  updateCrowd(now);
 
   // Atualiza animações ativas
   for (let i = activeAnimations.length - 1; i >= 0; i--) {
