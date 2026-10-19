@@ -16,7 +16,7 @@ Jogo de damas em 3D, feito para rodar no navegador do celular (Android e iPhone)
 
 ### Regras usadas
 
-- As peças andam 1 casa na diagonal, sempre para a frente. A dama anda quantas casas livres quiser, em qualquer diagonal, e captura à distância: salta a peça adversária e para em qualquer casa livre depois dela.
+- As peças andam 1 casa na diagonal, sempre para a frente. A dama anda até 2 casas livres em qualquer diagonal (para a frente ou para trás) e captura saltando a peça adversária vizinha, também em qualquer direção.
 - **Capturar não é obrigatório**, nem mesmo durante uma captura em cadeia.
 - Chegar à última linha promove o pneu a dama (ele ganha uma coroa) e encerra a jogada.
 - A partida empata depois de 50 lances seguidos só de damas, sem nenhuma captura.

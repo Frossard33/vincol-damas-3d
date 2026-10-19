@@ -1045,6 +1045,7 @@ function spawnStrikeBeam(fromPos, toPos, colorHex) {
 // É serializado para um Web Worker, para a IA pensar sem travar a animação.
 function createEngine() {
   const KING_DIRS = [[-1, -1], [-1, 1], [1, -1], [1, 1]];
+  const KING_RANGE = 2; // a dama anda no máximo 2 casas
   const WHITE_DIRS = [[-1, -1], [-1, 1]];
   const BLACK_DIRS = [[1, -1], [1, 1]];
   const WIN = 100000;
@@ -1094,44 +1095,6 @@ function createEngine() {
     const r = i >> 3;
     const c = i & 7;
     const dirs = dirsFor(p);
-    if (p === 2 || p === -2) {
-      // Dama de longo alcance: corre pela diagonal, salta uma peça adversária
-      // e pode parar em qualquer casa livre depois dela
-      for (let k = 0; k < 4; k++) {
-        const dr = dirs[k][0];
-        const dc = dirs[k][1];
-        let mr = r + dr;
-        let mc = c + dc;
-        while (mr >= 0 && mr <= 7 && mc >= 0 && mc <= 7 && b[mr * 8 + mc] === 0) {
-          mr += dr;
-          mc += dc;
-        }
-        if (mr < 0 || mr > 7 || mc < 0 || mc > 7) continue;
-        const m = mr * 8 + mc;
-        if (b[m] * p >= 0) continue;
-        const victim = b[m];
-        let jr = mr + dr;
-        let jc = mc + dc;
-        while (jr >= 0 && jr <= 7 && jc >= 0 && jc <= 7 && b[jr * 8 + jc] === 0) {
-          const j = jr * 8 + jc;
-          b[m] = 0;
-          b[i] = 0;
-          b[j] = p;
-          path.push(j);
-          capt.push(m);
-          out.push({ path: path.slice(), caps: capt.slice() });
-          genJumps(b, j, p, path, capt, out);
-          path.pop();
-          capt.pop();
-          b[j] = 0;
-          b[i] = p;
-          b[m] = victim;
-          jr += dr;
-          jc += dc;
-        }
-      }
-      return;
-    }
     for (let k = 0; k < dirs.length; k++) {
       const dr = dirs[k][0];
       const dc = dirs[k][1];
@@ -1148,6 +1111,7 @@ function createEngine() {
       path.push(j);
       capt.push(m);
       // Captura não é obrigatória: parar em qualquer ponto da cadeia é uma jogada válida
+      // (a dama captura como o pneu, só que em qualquer diagonal)
       out.push({ path: path.slice(), caps: capt.slice() });
       const promoted = (p === 1 && jr === 0) || (p === -1 && jr === 7);
       if (!promoted) genJumps(b, j, p, path, capt, out); // promoção encerra a jogada
@@ -1173,10 +1137,10 @@ function createEngine() {
       for (let k = 0; k < dirs.length; k++) {
         let nr = r + dirs[k][0];
         let nc = c + dirs[k][1];
-        // A dama anda quantas casas livres quiser na diagonal
-        while (nr >= 0 && nr <= 7 && nc >= 0 && nc <= 7 && b[nr * 8 + nc] === 0) {
+        // A dama anda até KING_RANGE casas livres na diagonal
+        for (let step = 1; step <= (king ? KING_RANGE : 1); step++) {
+          if (nr < 0 || nr > 7 || nc < 0 || nc > 7 || b[nr * 8 + nc] !== 0) break;
           quiet.push({ path: [i, nr * 8 + nc], caps: [] });
-          if (!king) break;
           nr += dirs[k][0];
           nc += dirs[k][1];
         }
@@ -1462,10 +1426,10 @@ function createEngine() {
 }
 
 const DIFFICULTY = {
-  facil:   { label: 'Fácil',   depth: 3,  time: 350,  noise: 45, blunder: 0.2 },
-  medio:   { label: 'Médio',   depth: 5,  time: 700,  noise: 12, blunder: 0.05 },
-  dificil: { label: 'Difícil', depth: 8,  time: 1000, noise: 0,  blunder: 0 },
-  mestre:  { label: 'Mestre',  depth: 40, time: 4000, noise: 0,  blunder: 0 }
+  facil:   { label: 'Fácil',   depth: 2,  time: 250,  noise: 80, blunder: 0.35 },
+  medio:   { label: 'Médio',   depth: 3,  time: 450,  noise: 35, blunder: 0.18 },
+  dificil: { label: 'Difícil', depth: 5,  time: 700,  noise: 12, blunder: 0.06 },
+  mestre:  { label: 'Mestre',  depth: 8,  time: 1200, noise: 0,  blunder: 0 }
 };
 const DIFFICULTY_ORDER = ['facil', 'medio', 'dificil', 'mestre'];
 
@@ -1763,32 +1727,6 @@ function getMovesForPiece(piece) {
   const captureMoves = [];
 
   const inside = (y, x) => y >= 0 && y < 8 && x >= 0 && x < 8;
-  if (isKing) {
-    // Dama de longo alcance: anda quantas casas quiser na diagonal e captura à distância,
-    // podendo parar em qualquer casa livre depois da peça capturada
-    [-1, 1].forEach((dr) => {
-      [-1, 1].forEach((dc) => {
-        let nr = r + dr;
-        let nc = c + dc;
-        while (inside(nr, nc) && !boardState[nr][nc]) {
-          normalMoves.push({ toR: nr, toC: nc, captured: null });
-          nr += dr;
-          nc += dc;
-        }
-        if (!inside(nr, nc) || boardState[nr][nc].userData.color === color) return;
-        const victim = boardState[nr][nc];
-        let jr = nr + dr;
-        let jc = nc + dc;
-        while (inside(jr, jc) && !boardState[jr][jc]) {
-          captureMoves.push({ toR: jr, toC: jc, captured: victim });
-          jr += dr;
-          jc += dc;
-        }
-      });
-    });
-    return [...captureMoves, ...normalMoves];
-  }
-
   dirs.forEach((dr) => {
     [-1, 1].forEach((dc) => {
       const nr = r + dr;
@@ -1796,6 +1734,12 @@ function getMovesForPiece(piece) {
       if (nr >= 0 && nr < 8 && nc >= 0 && nc < 8) {
         if (!boardState[nr][nc]) {
           normalMoves.push({ toR: nr, toC: nc, captured: null });
+          // A dama pode andar mais uma casa (máximo de 2)
+          const fr = nr + dr;
+          const fc = nc + dc;
+          if (isKing && inside(fr, fc) && !boardState[fr][fc]) {
+            normalMoves.push({ toR: fr, toC: fc, captured: null });
+          }
         } else if (boardState[nr][nc].userData.color !== color) {
           const jr = r + dr * 2;
           const jc = c + dc * 2;
